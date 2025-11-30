@@ -261,10 +261,20 @@ class FreqAIStrategy(IStrategy):
         `indicator_periods_candles`
 
         All features must be prepended with `%` to be recognized by FreqAI internals.
+        
+        NOTE: Đã xóa các features vi phạm nguyên tắc Stationarity:
+        - %-raw_price: Giá thô ($90,000) → Model không tổng quát hóa được
+        - %-raw_volume: Volume thô → Cần chuẩn hóa
+        - %-pct-change: Dư thừa vì đã có Log Returns ở feature_engineering.py
+        
+        Các features này đã được thay thế bởi các features đúng chuẩn trong 
+        FeatureEngineering.add_all_features()
         """
-        dataframe["%-pct-change"] = dataframe["close"].pct_change()
-        dataframe["%-raw_volume"] = dataframe["volume"]
-        dataframe["%-raw_price"] = dataframe["close"]
+        # Không thêm features thô ở đây
+        # Tất cả features đã được xử lý đúng trong feature_engineering.py:
+        # - %-log_return_* (thay cho pct-change, tốt hơn vì có tính cộng)
+        # - %-volume_ratio (volume / volume_ma, thay cho raw_volume)
+        # - %-dist_to_ema_* (thay cho raw_price)
         return dataframe
 
     def feature_engineering_standard(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
