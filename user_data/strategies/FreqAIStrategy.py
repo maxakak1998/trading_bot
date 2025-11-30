@@ -20,6 +20,7 @@ from indicators.smc_indicators import SMCIndicators
 from indicators.data_enhancement import DataEnhancement  # Phase 2 Features
 from indicators.feature_engineering import FeatureEngineering  # Phase 3: Proper ML Features
 from indicators.chart_patterns import ChartPatterns  # Phase 3: Chart Pattern Recognition
+from indicators.wave_indicators import WaveIndicators  # Phase 3: Elliott Wave Lite (Fibonacci + AO)
 
 logger = logging.getLogger(__name__)
 import talib.abstract as ta
@@ -202,6 +203,11 @@ class FreqAIStrategy(IStrategy):
         # Nhận dạng các mô hình giá: Double Top/Bottom, Head & Shoulders, Wedge, Triangle, Flag
         # Khó scale đa khung vì logic phức tạp
         dataframe = ChartPatterns.add_all_patterns(dataframe)
+        
+        # ==== Wave Indicators (Elliott Wave Lite) ====
+        # Fibonacci Retracement/Extensions, Awesome Oscillator, Wave Structure
+        # Objective features based on EW principles (no subjective wave counting)
+        dataframe = WaveIndicators.add_all_features(dataframe)
         
         # ==== SMC Indicators ====
         # Sonic R, EMA 369/630, Moon Phases - đặc thù SMC strategy
