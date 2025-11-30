@@ -1,4 +1,5 @@
-FROM freqtradeorg/freqtrade:develop
+FROM freqtradeorg/freqtrade:develop_freqai
 
-# Install FreqAI dependencies
-RUN pip install --user datasieve lightgbm xgboost pandas_ta scipy
+# develop_freqai already includes: XGBoost, LightGBM, datasieve
+# Only install additional dependencies not in base image
+RUN pip install --user pandas_ta scipy
