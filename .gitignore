@@ -78,5 +78,6 @@ logs/
 .cache/
 .pytest_cache/
 
-# Keep important config but ignore sensitive data
-# user_data/config.json  # Uncomment if you want to exclude config
+# Config with API keys
+user_data/config.json
+
