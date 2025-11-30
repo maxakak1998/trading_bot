@@ -105,9 +105,10 @@ class FreqAIStrategy(IStrategy):
         safe_sl_limit = -(max_risk_on_margin / current_leverage)
         
         if atr > 0 and current_rate > 0:
-            # Stoploss = -2 * (ATR / current_rate)
-            # Example: ATR = 2000, Price = 40000 → SL = -2 * (2000/40000) = -10%
-            dynamic_sl = -2.0 * (atr / current_rate)
+            # Stoploss = -3 * (ATR / current_rate)
+            # Example: ATR = 2000, Price = 40000 → SL = -3 * (2000/40000) = -15%
+            # Using 3x ATR gives more room for price movement before stop
+            dynamic_sl = -3.0 * (atr / current_rate)
             
             # Apply safety limits:
             # 1. Cannot be wider than safe_sl_limit (protect margin)
