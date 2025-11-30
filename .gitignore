@@ -1,0 +1,82 @@
+# Environment & Secrets
+/env/
+.env
+*.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Freqtrade specific
+user_data/tradesv3.sqlite
+user_data/tradesv3.sqlite-shm
+user_data/tradesv3.sqlite-wal
+user_data/tradesv3.dryrun.sqlite
+user_data/logs/*.log
+user_data/backtest_results/*.json
+user_data/backtest_results/*.meta.json
+user_data/hyperopt_results/
+user_data/models/*/
+user_data/plot/
+
+# Data files (large)
+user_data/data/binance/*.feather
+user_data/data/binance/*.json
+user_data/data/binance/*.h5
+
+# Logs
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Keep important config but ignore sensitive data
+# user_data/config.json  # Uncomment if you want to exclude config
