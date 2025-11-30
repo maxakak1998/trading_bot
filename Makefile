@@ -1,6 +1,6 @@
 # Makefile for Freqtrade
 
-.PHONY: help start stop restart logs update trade-dry create-userdir list-strategies
+.PHONY: help start stop restart logs update trade-dry create-userdir list-strategies train backtest hyperopt backup
 
 help: ## Show this help message
 	@echo 'Usage:'
@@ -31,3 +31,36 @@ create-userdir: ## Initialize user directory
 
 list-strategies: ## List available strategies
 	docker compose run --rm freqtrade list-strategies --userdir user_data
+
+# ===========================================
+# FreqAI Training & Optimization
+# ===========================================
+
+train: ## Train FreqAI model (5 months data) + auto backup
+	@echo "🚀 Starting FreqAI training..."
+	docker compose run --rm freqtrade backtesting \
+		--strategy FreqAIStrategy \
+		--timerange 20240601-20241101 \
+		--freqaimodel XGBoostClassifier
+	@echo "✅ Training complete! Starting backup..."
+	./scripts/backup_to_drive.sh incremental
+	@echo "☁️ Backup to Google Drive complete!"
+
+backtest: ## Run backtesting on trained model
+	docker compose run --rm freqtrade backtesting \
+		--strategy FreqAIStrategy \
+		--timerange 20241101-20241201 \
+		--freqaimodel XGBoostClassifier
+
+hyperopt: ## Optimize strategy parameters (50 epochs)
+	docker compose run --rm freqtrade hyperopt \
+		--strategy FreqAIStrategy \
+		--hyperopt-loss SharpeHyperOptLoss \
+		--epochs 50 \
+		--spaces buy sell roi stoploss
+
+backup: ## Manual backup to Google Drive
+	./scripts/backup_to_drive.sh incremental
+
+backup-full: ## Full backup to Google Drive
+	./scripts/backup_to_drive.sh full
