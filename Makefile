@@ -41,7 +41,7 @@ train: ## Train FreqAI model (5 months data) + auto backup
 	docker compose run --rm freqtrade backtesting \
 		--strategy FreqAIStrategy \
 		--timerange 20240601-20241101 \
-		--freqaimodel XGBoostClassifier
+		--freqaimodel XGBoostRegressor
 	@echo "✅ Training complete! Starting backup..."
 	./scripts/backup_to_drive.sh incremental
 	@echo "☁️ Backup to Google Drive complete!"
@@ -50,7 +50,7 @@ backtest: ## Run backtesting on trained model
 	docker compose run --rm freqtrade backtesting \
 		--strategy FreqAIStrategy \
 		--timerange 20241101-20241201 \
-		--freqaimodel XGBoostClassifier
+		--freqaimodel XGBoostRegressor
 
 hyperopt: ## Optimize strategy parameters (50 epochs)
 	docker compose run --rm freqtrade hyperopt \

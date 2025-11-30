@@ -1,7 +1,7 @@
 # Nhật Ký Quyết Định - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 15:15:00] - Thêm Decision 008: Google Drive Backup
+[2025-11-30 16:55:00] - Thêm Decision 010: FreqAI Training Fix
 
 ---
 
@@ -305,16 +305,65 @@ dataframe['%-log_return_1'] = np.log(close / close.shift(1))
 
 ## Quyết Định Đang Chờ
 
-### Quyết Định 010: Điều Chỉnh Ngưỡng Xu Hướng
+### Quyết Định 011: Điều Chỉnh Ngưỡng Xu Hướng
 **Trạng thái**: 🔄 Đang xem xét
 
 Có nên nới lỏng ngưỡng để bắt nhiều lệnh hơn?
 - Hiện tại: ADX > 25, BB Width > 0.04
 - Tùy chọn: ADX > 20, BB Width > 0.03
 
-### Quyết Định 011: Tích Hợp Model Pretrained
+### Quyết Định 012: Tích Hợp Model Pretrained
 **Trạng thái**: 🔜 Tương lai
 
 Khi nào thêm phân tích sentiment FinBERT?
 - Trong giai đoạn BUILD trên GCP (cần GPU)
 - Sau đó export model chạy local (CPU mode)
+
+---
+
+## Quyết Định 010: FreqAI Training Fix
+**Ngày**: 2025-11-30  
+**Trạng thái**: ✅ Đã triển khai
+
+### Bối Cảnh
+FreqAI không train, backtest trả về 0 trades. Debug phát hiện:
+- Warning: "Prediction column &s-up_or_down_mean NOT FOUND - FreqAI not training!"
+- Dataframe chỉ có 7-12 columns thay vì ~400 features
+
+### Root Cause
+`populate_indicators()` **THIẾU** dòng `self.freqai.start(dataframe, metadata, self)`.
+
+Theo FreqAI documentation: "The `self.freqai.start()` function cannot be called outside the `populate_indicators()`"
+
+### Quyết Định
+**Fix các vấn đề sau:**
+1. Thêm `self.freqai.start()` vào populate_indicators
+2. Sửa import conflict (pandas_ta vs talib)
+3. Sửa talib syntax (uppercase)
+4. Sửa numpy array `.diff()` error
+
+### Triển Khai
+```python
+# 1. FreqAIStrategy.py - populate_indicators (CRITICAL FIX)
+def populate_indicators(self, dataframe, metadata):
+    # THIS LINE WAS MISSING! Without it, FreqAI never trains
+    dataframe = self.freqai.start(dataframe, metadata, self)
+    return dataframe
+
+# 2. FreqAIStrategy.py - imports (avoid conflict)
+import pandas_ta as pta  # renamed from 'ta'
+import talib.abstract as ta  # talib for FreqAI
+
+# 3. feature_engineering.py - numpy to pandas fix
+ema = pd.Series(ta.EMA(...), index=dataframe.index)
+# ta.* returns numpy array, need pd.Series for .diff()
+```
+
+### Lý Do
+- FreqAI yêu cầu gọi `self.freqai.start()` để trigger feature engineering và training
+- Tất cả example strategies trong freqtrade repo đều có dòng này
+- Không gọi = FreqAI không biết phải train, trả về dataframe rỗng
+
+### Files Modified
+- `FreqAIStrategy.py`: populate_indicators, imports
+- `feature_engineering.py`: Convert numpy arrays to pd.Series

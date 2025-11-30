@@ -1,7 +1,7 @@
 # Theo Dõi Tiến Độ - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 16:00:00] - Phase 4.3 Feature Engineering Refactor HOÀN THÀNH
+[2025-11-30 16:55:00] - FreqAI Training FIX HOÀN THÀNH - Sẵn sàng train
 
 ---
 
@@ -58,6 +58,41 @@
 ---
 
 ## Đang Thực Hiện 🔄
+
+### ✅ FreqAI Training FIX (HOÀN THÀNH - 2025-11-30 16:55)
+
+**VẤN ĐỀ ĐÃ FIX:**
+1. ✅ `populate_indicators()` thiếu `self.freqai.start()` → FIXED
+2. ✅ Import conflict: `pandas_ta as ta` bị override → FIXED (renamed to `pta`)
+3. ✅ Talib syntax: viết hoa (MFI, ADX, RSI, BBANDS) → FIXED
+4. ✅ Numpy array `.diff()` error trong feature_engineering.py → FIXED (convert to pd.Series)
+
+**CODE CHANGES:**
+```python
+# 1. FreqAIStrategy.py - populate_indicators
+def populate_indicators(self, dataframe, metadata):
+    dataframe = self.freqai.start(dataframe, metadata, self)  # CRITICAL!
+    return dataframe
+
+# 2. FreqAIStrategy.py - imports
+import pandas_ta as pta  # renamed to avoid conflict
+import talib.abstract as ta  # talib for FreqAI
+
+# 3. feature_engineering.py - numpy to pandas fix
+ema = pd.Series(ta.EMA(...), index=dataframe.index)  # Convert numpy to pd.Series
+obv = pd.Series(ta.OBV(...), index=dataframe.index)
+rsi = pd.Series(ta.RSI(...), index=dataframe.index)
+```
+
+**SẴN SÀNG TRAIN:**
+```bash
+docker compose run --rm freqtrade backtesting \
+  --strategy FreqAIStrategy \
+  --timerange 20240601-20241101 \
+  --freqaimodel XGBoostClassifier
+```
+- 22 timeranges × 2 pairs = 44 total trains
+- Features: ~400+ (expand_basic × 3 TFs + expand_all)
 
 ### Phase 4: Kiến Trúc AI Nâng Cao
 - [x] Thiết kế tài liệu kiến trúc
@@ -175,8 +210,8 @@
 
 | File | Thay Đổi Lần Cuối | Nội Dung |
 |------|-------------------|----------|
-| `FreqAIStrategy.py` | Phase 4.3 | +FeatureEngineering, +ChartPatterns |
-| `feature_engineering.py` | Phase 4.3 (MỚI) | Log Returns, EMA dist/slope, Volume, Volatility |
+| `FreqAIStrategy.py` | FreqAI Fix (16:55) | +freqai.start(), +import fix, +talib syntax |
+| `feature_engineering.py` | FreqAI Fix (16:55) | Fix numpy→pandas cho .diff() |
 | `chart_patterns.py` | Phase 4.3 (MỚI) | Double Top/Bottom, H&S, Wedge, Triangle, Flag |
 | `data_enhancement.py` | Phase 4.2 (MỚI) | Fear&Greed, Volume Imbalance, Funding Proxy |
 | `config.json` | Phase 4.1 | +use_custom_stoploss, stake_amount→unlimited |

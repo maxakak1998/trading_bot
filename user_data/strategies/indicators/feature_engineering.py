@@ -75,9 +75,9 @@ class FeatureEngineering:
         Đo lường tốc độ thay đổi giá theo nhiều cách.
         """
         # ROC (Rate of Change) - Phần trăm thay đổi
-        dataframe['%-roc_5'] = ta.ROCP(dataframe['close'], timeperiod=5)
-        dataframe['%-roc_10'] = ta.ROCP(dataframe['close'], timeperiod=10)
-        dataframe['%-roc_20'] = ta.ROCP(dataframe['close'], timeperiod=20)
+        dataframe['%-roc_5'] = pd.Series(ta.ROCP(dataframe['close'], timeperiod=5), index=dataframe.index)
+        dataframe['%-roc_10'] = pd.Series(ta.ROCP(dataframe['close'], timeperiod=10), index=dataframe.index)
+        dataframe['%-roc_20'] = pd.Series(ta.ROCP(dataframe['close'], timeperiod=20), index=dataframe.index)
         
         # Price momentum (close - close.shift) / close.shift
         dataframe['%-momentum_5'] = (dataframe['close'] - dataframe['close'].shift(5)) / (dataframe['close'].shift(5) + 1e-10)
@@ -108,8 +108,8 @@ class FeatureEngineering:
             DataFrame với EMA distance và slope features
         """
         for period in periods:
-            # Tính EMA
-            ema = ta.EMA(dataframe['close'], timeperiod=period)
+            # Tính EMA - convert to pandas Series
+            ema = pd.Series(ta.EMA(dataframe['close'], timeperiod=period), index=dataframe.index)
             
             # Distance to EMA (chuẩn hóa)
             # Dương: Giá trên EMA, Âm: Giá dưới EMA
@@ -121,8 +121,8 @@ class FeatureEngineering:
         
         # EMA Cross (tín hiệu giao cắt) - Chuẩn hóa
         if 20 in periods and 50 in periods:
-            ema_20 = ta.EMA(dataframe['close'], timeperiod=20)
-            ema_50 = ta.EMA(dataframe['close'], timeperiod=50)
+            ema_20 = pd.Series(ta.EMA(dataframe['close'], timeperiod=20), index=dataframe.index)
+            ema_50 = pd.Series(ta.EMA(dataframe['close'], timeperiod=50), index=dataframe.index)
             dataframe['%-ema_20_50_diff'] = (ema_20 - ema_50) / (ema_50 + 1e-10)
         
         return dataframe
@@ -136,12 +136,12 @@ class FeatureEngineering:
         Thêm thông tin về hướng xu hướng.
         """
         # ADX - Sức mạnh xu hướng (đã chuẩn hóa 0-100)
-        adx = ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        adx = pd.Series(ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
         dataframe['%-adx'] = adx / 100  # Chuẩn hóa về 0-1
         
         # +DI và -DI để biết hướng
-        plus_di = ta.PLUS_DI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
-        minus_di = ta.MINUS_DI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        plus_di = pd.Series(ta.PLUS_DI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
+        minus_di = pd.Series(ta.MINUS_DI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
         
         # DI Difference (chuẩn hóa) - Hướng xu hướng
         # Dương: Xu hướng tăng, Âm: Xu hướng giảm
@@ -162,14 +162,14 @@ class FeatureEngineering:
         Chuyển về khoảng [-1, 1] hoặc [0, 1] để AI dễ học.
         """
         # RSI (0-100) → Chuẩn hóa về [-1, 1]
-        rsi = ta.RSI(dataframe['close'], timeperiod=14)
+        rsi = pd.Series(ta.RSI(dataframe['close'], timeperiod=14), index=dataframe.index)
         dataframe['%-rsi_normalized'] = (rsi - 50) / 50  # -1 (oversold) to +1 (overbought)
         
-        # RSI Slope (momentum của RSI)
+        # RSI Slope (momentum của RSI) - rsi already is pd.Series
         dataframe['%-rsi_slope'] = rsi.diff(3) / 100
         
         # Williams %R (-100 to 0) → Chuẩn hóa về [-1, 1]
-        willr = ta.WILLR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        willr = pd.Series(ta.WILLR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
         dataframe['%-willr_normalized'] = (willr + 50) / 50  # -1 (oversold) to +1 (overbought)
         
         # Stochastic RSI (0-100) → Chuẩn hóa
@@ -180,7 +180,7 @@ class FeatureEngineering:
             dataframe['%-stochrsi'] = 0
         
         # CCI (Commodity Channel Index) - Đã dao động quanh 0
-        cci = ta.CCI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=20)
+        cci = pd.Series(ta.CCI(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=20), index=dataframe.index)
         dataframe['%-cci_normalized'] = cci / 200  # Thường dao động -200 to +200
         
         return dataframe
@@ -198,7 +198,7 @@ class FeatureEngineering:
         ATR / Price (vd: 5%) thì AI hiểu được.
         """
         # ATR normalized by price (%)
-        atr = ta.ATR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        atr = pd.Series(ta.ATR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
         dataframe['%-atr_pct'] = atr / dataframe['close']
         
         # ATR change (volatility đang tăng hay giảm?)
@@ -206,24 +206,31 @@ class FeatureEngineering:
         
         # Bollinger Band Width (đã chuẩn hóa)
         bb = pta.bbands(dataframe['close'], length=20, std=2)
-        if bb is not None:
-            upper = bb['BBU_20_2.0']
-            lower = bb['BBL_20_2.0']
-            middle = bb['BBM_20_2.0']
+        if bb is not None and len(bb.columns) >= 3:
+            # Dynamic column name detection (pandas_ta may use different naming)
+            bb_cols = bb.columns.tolist()
+            upper_col = [c for c in bb_cols if 'BBU' in c][0] if any('BBU' in c for c in bb_cols) else None
+            lower_col = [c for c in bb_cols if 'BBL' in c][0] if any('BBL' in c for c in bb_cols) else None
+            middle_col = [c for c in bb_cols if 'BBM' in c][0] if any('BBM' in c for c in bb_cols) else None
             
-            # BB Width (% of price)
-            dataframe['%-bb_width'] = (upper - lower) / middle
-            
-            # BB Position (vị trí giá trong BB)
-            # 0 = lower band, 1 = upper band, 0.5 = middle
-            dataframe['%-bb_position'] = (dataframe['close'] - lower) / (upper - lower + 1e-10)
-            
-            # Distance to bands
-            dataframe['%-dist_to_bb_upper'] = (upper - dataframe['close']) / dataframe['close']
-            dataframe['%-dist_to_bb_lower'] = (dataframe['close'] - lower) / dataframe['close']
+            if upper_col and lower_col and middle_col:
+                upper = bb[upper_col]
+                lower = bb[lower_col]
+                middle = bb[middle_col]
+                
+                # BB Width (% of price)
+                dataframe['%-bb_width'] = (upper - lower) / middle
+                
+                # BB Position (vị trí giá trong BB)
+                # 0 = lower band, 1 = upper band, 0.5 = middle
+                dataframe['%-bb_position'] = (dataframe['close'] - lower) / (upper - lower + 1e-10)
+                
+                # Distance to bands
+                dataframe['%-dist_to_bb_upper'] = (upper - dataframe['close']) / dataframe['close']
+                dataframe['%-dist_to_bb_lower'] = (dataframe['close'] - lower) / dataframe['close']
         
         # True Range normalized
-        tr = ta.TRANGE(dataframe['high'], dataframe['low'], dataframe['close'])
+        tr = pd.Series(ta.TRANGE(dataframe['high'], dataframe['low'], dataframe['close']), index=dataframe.index)
         dataframe['%-true_range_pct'] = tr / dataframe['close']
         
         return dataframe
@@ -240,11 +247,11 @@ class FeatureEngineering:
         OBV, CMF, MFI phản ánh áp lực mua/bán.
         """
         # MFI (Money Flow Index) - Đã chuẩn hóa 0-100
-        mfi = ta.MFI(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'], timeperiod=14)
+        mfi = pd.Series(ta.MFI(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'], timeperiod=14), index=dataframe.index)
         dataframe['%-mfi_normalized'] = (mfi - 50) / 50  # -1 to +1
         
         # OBV (On Balance Volume) - Cần chuẩn hóa
-        obv = ta.OBV(dataframe['close'], dataframe['volume'])
+        obv = pd.Series(ta.OBV(dataframe['close'], dataframe['volume']), index=dataframe.index)
         # OBV Change (normalized by rolling max)
         obv_change = obv.diff(5)
         obv_std = obv.rolling(20).std()
@@ -270,14 +277,10 @@ class FeatureEngineering:
             dataframe['%-cmf'] = 0
         
         # VWAP Distance (Volume Weighted Average Price)
-        vwap = pta.vwap(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'])
-        if vwap is not None:
-            dataframe['%-dist_to_vwap'] = (dataframe['close'] - vwap) / (vwap + 1e-10)
-        else:
-            # Fallback: Use typical price weighted
-            typical_price = (dataframe['high'] + dataframe['low'] + dataframe['close']) / 3
-            vwap_approx = (typical_price * dataframe['volume']).rolling(20).sum() / dataframe['volume'].rolling(20).sum()
-            dataframe['%-dist_to_vwap'] = (dataframe['close'] - vwap_approx) / (vwap_approx + 1e-10)
+        # Note: pta.vwap requires datetime index, use manual calculation instead
+        typical_price = (dataframe['high'] + dataframe['low'] + dataframe['close']) / 3
+        vwap_approx = (typical_price * dataframe['volume']).rolling(20).sum() / (dataframe['volume'].rolling(20).sum() + 1e-10)
+        dataframe['%-dist_to_vwap'] = (dataframe['close'] - vwap_approx) / (vwap_approx + 1e-10)
         
         return dataframe
     

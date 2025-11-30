@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# Google Drive Restore Script
-# ===========================
-# Khôi phục user_data/ từ Google Drive
+# Google Drive Restore Script with Versioning
+# ============================================
+# Khôi phục user_data/ từ Google Drive với version control
 # Yêu cầu: rclone đã cấu hình với Google Drive
 #
-# Usage: ./restore_from_drive.sh [all|data|models|strategies|config]
+# Usage: ./restore_from_drive.sh [all|data|models|strategies|config|versions|rollback]
 #
 # WARNING: Script này sẽ GHI ĐÈ dữ liệu local!
 
@@ -168,20 +168,135 @@ list_available_backups() {
     rclone size "${RCLONE_REMOTE}:${DRIVE_FOLDER}" 2>&1 | tee -a "$LOG_FILE"
 }
 
+# =====================================================
+# VERSIONED MODEL FUNCTIONS
+# =====================================================
+
+list_model_versions() {
+    log "=== AVAILABLE MODEL VERSIONS ==="
+    
+    local remote_versions_path="${RCLONE_REMOTE}:${DRIVE_FOLDER}/model_versions"
+    
+    echo ""
+    echo "┌─────────────────────────────┬──────────────┬─────────────────────┐"
+    echo "│ Version                     │ Size         │ Created At          │"
+    echo "├─────────────────────────────┼──────────────┼─────────────────────┤"
+    
+    rclone lsf "${remote_versions_path}" --dirs-only 2>/dev/null | sort -r | while read version; do
+        version="${version%/}"  # Remove trailing slash
+        local size=$(rclone size "${remote_versions_path}/${version}" --json 2>/dev/null | jq -r '.bytes' 2>/dev/null || echo "0")
+        local size_mb=$((size / 1024 / 1024))
+        
+        # Get created_at from metadata if exists
+        local created_at="N/A"
+        local metadata=$(rclone cat "${remote_versions_path}/${version}/metadata.json" 2>/dev/null || echo "{}")
+        if [ "$metadata" != "{}" ]; then
+            created_at=$(echo "$metadata" | jq -r '.created_at // "N/A"' 2>/dev/null | cut -d'T' -f1 || echo "N/A")
+        fi
+        
+        printf "│ %-27s │ %8d MB │ %-19s │\n" "$version" "$size_mb" "$created_at"
+    done
+    
+    echo "└─────────────────────────────┴──────────────┴─────────────────────┘"
+    echo ""
+    echo "Usage: $0 rollback <version_name>"
+    echo "Example: $0 rollback models_20241130_105300"
+    echo ""
+}
+
+rollback_to_version() {
+    local target_version="$1"
+    
+    if [ -z "$target_version" ]; then
+        log "ERROR: Cần chỉ định version. Ví dụ: $0 rollback models_20241130_105300"
+        echo ""
+        list_model_versions
+        exit 1
+    fi
+    
+    local remote_versions_path="${RCLONE_REMOTE}:${DRIVE_FOLDER}/model_versions"
+    local version_path="${remote_versions_path}/${target_version}"
+    
+    # Kiểm tra version tồn tại
+    if ! rclone lsd "${version_path}" &> /dev/null; then
+        log "ERROR: Version '${target_version}' không tồn tại!"
+        echo ""
+        list_model_versions
+        exit 1
+    fi
+    
+    log "=== ROLLBACK TO VERSION: ${target_version} ==="
+    
+    # Show metadata
+    log "Reading version metadata..."
+    local metadata=$(rclone cat "${version_path}/metadata.json" 2>/dev/null || echo "{}")
+    if [ "$metadata" != "{}" ]; then
+        log "Version info:"
+        echo "$metadata" | jq '.' 2>/dev/null || echo "$metadata"
+    fi
+    
+    # Backup current models trước khi rollback
+    backup_local_models
+    
+    # Restore từ version
+    log "Restoring models from ${target_version}..."
+    rclone sync "${version_path}/models" "${USER_DATA_DIR}/models" \
+        --progress \
+        --transfers 4 2>&1 | tee -a "$LOG_FILE"
+    
+    log "=== ROLLBACK HOÀN TẤT ==="
+    log "Models restored to version: ${target_version}"
+}
+
+backup_local_models() {
+    local backup_dir="${USER_DATA_DIR}/models_backup_$(date +%Y%m%d_%H%M%S)"
+    
+    if [ -d "${USER_DATA_DIR}/models" ] && [ -n "$(ls -A "${USER_DATA_DIR}/models" 2>/dev/null)" ]; then
+        log "Backing up current models to: ${backup_dir}"
+        cp -r "${USER_DATA_DIR}/models" "$backup_dir" 2>/dev/null || true
+        log "Local backup created."
+    fi
+}
+
+restore_latest_versioned_models() {
+    log "=== RESTORE LATEST VERSIONED MODELS ==="
+    
+    local remote_versions_path="${RCLONE_REMOTE}:${DRIVE_FOLDER}/model_versions"
+    
+    # Lấy version mới nhất
+    local latest_version=$(rclone lsf "${remote_versions_path}" --dirs-only 2>/dev/null | sort -r | head -1)
+    latest_version="${latest_version%/}"  # Remove trailing slash
+    
+    if [ -z "$latest_version" ]; then
+        log "WARNING: Không tìm thấy versioned models. Trying regular restore..."
+        restore_models
+        return
+    fi
+    
+    log "Latest version found: ${latest_version}"
+    rollback_to_version "$latest_version"
+}
+
 show_usage() {
-    echo "Usage: $0 [all|data|models|strategies|config|list]"
+    echo "Usage: $0 [all|data|models|strategies|config|list|versions|rollback]"
     echo ""
     echo "Options:"
     echo "  all        - Restore tất cả dữ liệu (WARNING: ghi đè local)"
     echo "  data       - Restore chỉ OHLCV data"
-    echo "  models     - Restore chỉ AI models"
+    echo "  models     - Restore models từ latest version (với versioning)"
     echo "  strategies - Restore chỉ strategies code"
     echo "  config     - Restore chỉ config files"
     echo "  list       - Liệt kê backups có sẵn trên Drive"
     echo ""
+    echo "Versioning commands:"
+    echo "  versions               - Liệt kê tất cả model versions"
+    echo "  rollback <version>     - Rollback về version cụ thể"
+    echo ""
     echo "Examples:"
-    echo "  $0 models     # Restore models từ Drive"
-    echo "  $0 all        # Restore toàn bộ"
+    echo "  $0 models                         # Restore latest versioned models"
+    echo "  $0 versions                       # List all model versions"
+    echo "  $0 rollback models_20241130_105300 # Rollback to specific version"
+    echo "  $0 all                            # Restore toàn bộ"
 }
 
 # =====================================================
@@ -190,12 +305,13 @@ show_usage() {
 
 main() {
     log "============================================="
-    log "  Google Drive Restore Script"
+    log "  Google Drive Restore Script (with Versioning)"
     log "============================================="
     
     check_requirements
     
     local target="${1:-help}"
+    local version="${2:-}"
     
     case "$target" in
         all)
@@ -210,7 +326,7 @@ main() {
             restore_data
             ;;
         models)
-            restore_models
+            restore_latest_versioned_models
             ;;
         strategies)
             restore_strategies
@@ -220,6 +336,18 @@ main() {
             ;;
         list)
             list_available_backups
+            ;;
+        versions)
+            list_model_versions
+            exit 0
+            ;;
+        rollback)
+            if confirm_action "WARNING: Sẽ ghi đè models local. Tiếp tục?"; then
+                rollback_to_version "$version"
+            else
+                log "Đã hủy rollback."
+                exit 0
+            fi
             ;;
         help|--help|-h)
             show_usage

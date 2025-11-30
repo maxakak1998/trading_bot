@@ -1,14 +1,28 @@
 # Ngữ Cảnh Hiện Tại - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 16:00:00] - Phase 4.3 Feature Engineering Refactor HOÀN THÀNH
+[2025-11-30 16:55:00] - FreqAI Training FIX HOÀN THÀNH
 
 ## 1. Trọng Tâm Hiện Tại
 
 **Giai Đoạn**: Phase 4 - Kiến Trúc AI Nâng Cao  
-**Trạng Thái**: Phase 3 (Feature Engineering + Chart Patterns) ĐÃ XONG, Phase 4 (Hyperopt) ĐANG CHỜ
+**Trạng Thái**: FreqAI Training FIX ĐÃ XONG → Sẵn sàng TRAIN MODEL
 
 ## 2. Thành Tựu Gần Đây
+
+### FreqAI Training Fix (HOÀN THÀNH) ✅ [2025-11-30 16:55]
+
+**ROOT CAUSE:** `populate_indicators()` không gọi `self.freqai.start()` → FreqAI không bao giờ train!
+
+**FIXES:**
+1. Added `dataframe = self.freqai.start(dataframe, metadata, self)` to populate_indicators
+2. Renamed `pandas_ta as pta` to avoid import conflict with `talib.abstract as ta`
+3. Fixed talib syntax (uppercase: MFI, ADX, RSI, BBANDS, ATR)
+4. Fixed numpy array `.diff()` error - convert to pd.Series first
+
+**FILES MODIFIED:**
+- `FreqAIStrategy.py` - populate_indicators, imports
+- `feature_engineering.py` - numpy to pandas conversion
 
 ### Phase 3: Feature Engineering Refactor (HOÀN THÀNH) ✅ [2025-11-30 16:00]
 
@@ -91,4 +105,6 @@ docker compose run --rm freqtrade hyperopt \
 
 ## 6. Trở Ngại
 
-Hiện tại không có. Hệ thống đã được refactor với Feature Engineering đúng chuẩn.
+~~FreqAI không train~~ → **SOLVED!** Thiếu `self.freqai.start()` trong populate_indicators.
+
+**Hiện tại không có trở ngại.** Code đã sẵn sàng để train.

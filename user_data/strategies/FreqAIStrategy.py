@@ -10,7 +10,8 @@ from pandas import DataFrame
 from freqtrade.strategy import IStrategy, IntParameter, DecimalParameter, CategoricalParameter
 import logging
 from pandas import DataFrame
-import pandas_ta as ta
+import pandas_ta as pta  # pandas_ta for advanced indicators
+import talib.abstract as ta  # talib for basic indicators (required by FreqAI)
 import sys
 from pathlib import Path
 
@@ -23,7 +24,6 @@ from indicators.chart_patterns import ChartPatterns  # Phase 3: Chart Pattern Re
 from indicators.wave_indicators import WaveIndicators  # Phase 3: Elliott Wave Lite (Fibonacci + AO)
 
 logger = logging.getLogger(__name__)
-import talib.abstract as ta
 import freqtrade.vendor.qtpylib.indicators as qtpylib
 
 class FreqAIStrategy(IStrategy):
@@ -43,19 +43,25 @@ class FreqAIStrategy(IStrategy):
     stoploss = -0.05
     trailing_stop = False
     
+    # Maximum risk per trade (% of margin)
+    # Can be overridden in config.json under strategy settings
+    # Example: "max_risk_per_trade": 0.15 for 15% max loss
+    max_risk_per_trade = 0.20  # 20% default - Change this value to adjust risk tolerance
+    
     # Leverage calculation:
-    # Target Risk per Trade = 20% of Stake (Margin)
+    # Target Risk per Trade = max_risk_per_trade% of Stake (Margin)
     # Loss = Stake * Leverage * Stoploss_Price_Dist
-    # 0.20 * Stake = Stake * Leverage * Stoploss_Price_Dist
-    # Leverage = 0.20 / Stoploss_Price_Dist
+    # max_risk_per_trade * Stake = Stake * Leverage * Stoploss_Price_Dist
+    # Leverage = max_risk_per_trade / Stoploss_Price_Dist
     
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
                  proposed_leverage: float, max_leverage: float, entry_tag: Optional[str], side: str,
                  **kwargs) -> float:
         """
         Customize leverage for each new trade.
+        Uses max_risk_per_trade to calculate appropriate leverage.
         """
-        risk_per_trade = 0.20  # 20% loss allowed on margin
+        risk_per_trade = self.max_risk_per_trade  # Use configurable risk limit
         stoploss_dist = abs(self.stoploss)
         
         # Calculate leverage
@@ -77,6 +83,9 @@ class FreqAIStrategy(IStrategy):
         
         High volatility (high ATR) → Wider stoploss
         Low volatility (low ATR) → Tighter stoploss
+        
+        SAFETY: Stoploss is CLIPPED to ensure max loss never exceeds 20% of margin.
+        Formula: Max_SL_Price = Max_Risk(20%) / Leverage
         """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         last_candle = dataframe.iloc[-1].squeeze()
@@ -84,16 +93,36 @@ class FreqAIStrategy(IStrategy):
         # Get ATR from last candle
         atr = last_candle.get('atr', 0)
         
+        # Get current leverage of the trade (default 1x if not available)
+        current_leverage = getattr(trade, 'leverage', 1.0) or 1.0
+        
+        # SAFETY LIMIT: Max risk = max_risk_per_trade% of margin
+        # Max_SL_Price = Max_Risk / Leverage
+        # Example: Leverage 5x, Risk 20% → Max SL = 20% / 5 = -4%
+        # Example: Leverage 10x, Risk 20% → Max SL = 20% / 10 = -2%
+        # Example: Leverage 20x, Risk 20% → Max SL = 20% / 20 = -1%
+        max_risk_on_margin = self.max_risk_per_trade  # Use configurable risk limit
+        safe_sl_limit = -(max_risk_on_margin / current_leverage)
+        
         if atr > 0 and current_rate > 0:
             # Stoploss = -2 * (ATR / current_rate)
             # Example: ATR = 2000, Price = 40000 → SL = -2 * (2000/40000) = -10%
             dynamic_sl = -2.0 * (atr / current_rate)
             
-            # Cap between -15% (max loss) and -2% (min protection)
-            return max(dynamic_sl, -0.15, min(dynamic_sl, -0.02))
+            # Apply safety limits:
+            # 1. Cannot be wider than safe_sl_limit (protect margin)
+            # 2. Cannot be tighter than -1% (allow some movement)
+            # 3. Cannot be wider than -15% absolute max
+            final_sl = max(dynamic_sl, safe_sl_limit, -0.15)  # Not wider than limit
+            final_sl = min(final_sl, -0.01)  # Not tighter than 1%
+            
+            logger.debug(f"{pair}: ATR-SL={dynamic_sl:.2%}, SafeLimit={safe_sl_limit:.2%}, "
+                        f"Leverage={current_leverage}x, FinalSL={final_sl:.2%}")
+            
+            return final_sl
         
         # Fallback to static stoploss if ATR not available
-        return self.stoploss
+        return max(self.stoploss, safe_sl_limit)
     
     def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
                            proposed_stake: float, min_stake: Optional[float], max_stake: float,
@@ -149,17 +178,13 @@ class FreqAIStrategy(IStrategy):
         - ADX < 20 + BB Width < 0.02 → SIDEWAY (no clear direction)
         - Otherwise → VOLATILE (unpredictable, avoid trading)
         """
-        # Ensure ADX is calculated
+        # Ensure ADX is calculated (using talib - uppercase function names)
         if 'adx' not in dataframe.columns:
-            adx_result = ta.adx(dataframe['high'], dataframe['low'], dataframe['close'])
-            if isinstance(adx_result, DataFrame):
-                dataframe['adx'] = adx_result['ADX_14'] if 'ADX_14' in adx_result.columns else adx_result.iloc[:, 0]
-            else:
-                dataframe['adx'] = adx_result
+            dataframe['adx'] = ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
         
         # Ensure ATR is calculated
         if 'atr' not in dataframe.columns:
-            dataframe['atr'] = ta.atr(dataframe['high'], dataframe['low'], dataframe['close'], length=14)
+            dataframe['atr'] = ta.ATR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
         
         dataframe['atr_pct'] = dataframe['atr'] / dataframe['close']
         
@@ -180,9 +205,24 @@ class FreqAIStrategy(IStrategy):
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
         Adds several different TA indicators to the given DataFrame
+        
+        CRITICAL: Must call self.freqai.start() to trigger FreqAI training and prediction!
+        Without this call, FreqAI will NOT train and you get 0 trades.
         """
-        # Market Regime Detection - must be called after BB indicators are available
-        # Will be calculated in feature_engineering after all indicators are ready
+        # Calculate Bollinger Bands for market_regime detection (needed before detect_market_regime)
+        # ta.BBANDS returns tuple: (upperband, middleband, lowerband)
+        bb_upper, bb_middle, bb_lower = ta.BBANDS(dataframe['close'], timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe['bb_upperband'] = bb_upper
+        dataframe['bb_lowerband'] = bb_lower
+        dataframe['bb_middleband'] = bb_middle
+        
+        # This is THE critical line that triggers FreqAI training!
+        # It calls feature_engineering_* methods and trains/predicts
+        dataframe = self.freqai.start(dataframe, metadata, self)
+        
+        # Add market_regime for entry/exit decisions (after FreqAI processing)
+        dataframe = self.detect_market_regime(dataframe)
+        
         return dataframe
 
     def feature_engineering_expand_all(self, dataframe: DataFrame, period: int, metadata: dict, **kwargs) -> DataFrame:
@@ -219,15 +259,15 @@ class FreqAIStrategy(IStrategy):
         dataframe = DataEnhancement.add_all_features(dataframe, period=period)
 
         # ==== Legacy indicators (cho Market Regime) ====
-        dataframe['mfi'] = ta.mfi(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'])
-        dataframe['adx'] = ta.adx(dataframe['high'], dataframe['low'], dataframe['close'])['ADX_14']
-        dataframe['rsi'] = ta.rsi(dataframe['close'])
+        # Using talib (uppercase function names)
+        dataframe['mfi'] = ta.MFI(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'], timeperiod=14)
+        dataframe['adx'] = ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        dataframe['rsi'] = ta.RSI(dataframe['close'], timeperiod=14)
         
         # Bollinger Bands (cần cho market regime detection)
-        bollinger = ta.bbands(dataframe['close'], length=20, std=2)
-        dataframe['bb_lowerband'] = bollinger['BBL_20_2.0']
-        dataframe['bb_middleband'] = bollinger['BBM_20_2.0']
-        dataframe['bb_upperband'] = bollinger['BBU_20_2.0']
+        dataframe['bb_upperband'], dataframe['bb_middleband'], dataframe['bb_lowerband'] = ta.BBANDS(
+            dataframe['close'], timeperiod=20, nbdevup=2.0, nbdevdn=2.0
+        )
         
         dataframe["bb_width"] = (
             dataframe["bb_upperband"] - dataframe["bb_lowerband"]
@@ -276,36 +316,46 @@ class FreqAIStrategy(IStrategy):
         *Only functional with FreqAI enabled strategies*
         Required function to set the targets for the model.
         All targets must be prepended with `&` to be recognized by the FreqAI internals.
+        
+        Using regression target (% price change) instead of classification
+        to avoid "unseen labels" error when training data is imbalanced.
         """
-        # We are trying to predict the price 20 candles into the future
-        dataframe["&s-up_or_down"] = np.where(
-            dataframe["close"].shift(-20) > dataframe["close"], 1, 0
-        )
+        # Regression target: % price change in next 20 candles
+        # Positive = price goes up, Negative = price goes down
+        future_close = dataframe["close"].shift(-20)
+        dataframe["&-price_change_pct"] = (future_close - dataframe["close"]) / dataframe["close"]
+        
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
         Based on TA indicators, populates the entry signal for the given dataframe
         
-        Entry conditions:
+        Entry conditions (using Regression model):
         1. Market Regime = TREND (strong directional movement)
-        2. AI Prediction > 0.6 (high confidence)
+        2. AI Prediction > 0.01 (predicts >1% price increase)
         3. Volume > 0 (market is active)
         4. [Phase 2] Not in Extreme Greed (avoid FOMO entries)
         5. [Phase 2] Volume Imbalance > 0 (more buyers than sellers)
         6. [Phase 2] Market not overheated (price premium z-score < 2)
         """
         # Debug: Print columns to see what FreqAI added
-        # print(f"Columns available: {dataframe.columns.tolist()}")
+        logger.info(f"Columns available: {len(dataframe.columns)} columns")
+        logger.info(f"Sample columns: {dataframe.columns[:20].tolist()}")
         
         if self.config['freqai']['enabled']:
-            # Check if prediction column exists
-            prediction_col = '&s-up_or_down_mean'
+            # Regression target column (predicts % price change)
+            prediction_col = '&-price_change_pct'
+            logger.info(f"Looking for prediction column: {prediction_col}")
+            logger.info(f"Prediction column exists: {prediction_col in dataframe.columns}")
+            
             if prediction_col in dataframe.columns:
-                # Base conditions
+                logger.info(f"Prediction values sample: {dataframe[prediction_col].head()}")
+                
+                # Base conditions (regression: predict > 1% price increase)
                 base_conditions = (
                     (dataframe['market_regime'] == 'TREND') &  # Only trade in TREND
-                    (dataframe[prediction_col] > 0.6) &  # High confidence it goes up
+                    (dataframe[prediction_col] > 0.01) &  # Predicts >1% price increase
                     (dataframe['volume'] > 0)
                 )
                 
@@ -327,6 +377,7 @@ class FreqAIStrategy(IStrategy):
                     base_conditions & fg_condition & vi_condition & overheat_condition,
                     'enter_long'] = 1
             else:
+                logger.warning(f"Prediction column {prediction_col} NOT FOUND - FreqAI not training!")
                 pass
                 # print(f"Warning: {prediction_col} not found in dataframe.")
 
@@ -336,18 +387,19 @@ class FreqAIStrategy(IStrategy):
         """
         Based on TA indicators, populates the exit signal for the given dataframe
         
-        Exit conditions:
-        1. AI Prediction < 0.4 (high confidence it goes down)
+        Exit conditions (using Regression model):
+        1. AI Prediction < -0.01 (predicts >1% price decrease)
         2. Volume > 0 (market is active)
         3. [Phase 2] Extreme Fear detected (panic selling in market) - early exit
         4. [Phase 2] Market oversold (may bounce, but safer to exit)
         """
         if self.config['freqai']['enabled']:
-            prediction_col = '&s-up_or_down_mean'
+            # Regression target column (predicts % price change)
+            prediction_col = '&-price_change_pct'
             if prediction_col in dataframe.columns:
-                # Base exit condition
+                # Base exit condition (predict > 1% price decrease)
                 base_exit = (
-                    (dataframe[prediction_col] < 0.4) &  # Confidence it goes down
+                    (dataframe[prediction_col] < -0.01) &  # Predicts >1% price decrease
                     (dataframe['volume'] > 0)
                 )
                 
