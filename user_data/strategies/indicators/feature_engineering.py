@@ -390,7 +390,14 @@ class FeatureEngineering:
         # 7. Support/Resistance
         dataframe = FeatureEngineering.add_sr_features(dataframe)
         
-        logger.info(f"Added {len([c for c in dataframe.columns if c.startswith('%-')])} features")
+        # 8. Handle NaN values from rolling indicators
+        # Rolling indicators like EMA(200), rolling(50) create NaN in first N rows
+        # Strategy: Forward fill first, then fill remaining with 0
+        feature_cols = [c for c in dataframe.columns if c.startswith('%-')]
+        dataframe[feature_cols] = dataframe[feature_cols].ffill()  # Forward fill
+        dataframe[feature_cols] = dataframe[feature_cols].fillna(0)  # Fill remaining NaN with 0
+        
+        logger.info(f"Added {len(feature_cols)} features")
         
         return dataframe
 
