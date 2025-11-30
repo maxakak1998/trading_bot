@@ -187,47 +187,32 @@ class FreqAIStrategy(IStrategy):
     def feature_engineering_expand_all(self, dataframe: DataFrame, period: int, metadata: dict, **kwargs) -> DataFrame:
         """
         *Only functional with FreqAI enabled strategies*
-        This function will automatically expand the defined features using the config defined
-        'indicator_periods', 'include_timeframes', 'include_shifted_candles' and 'include_corr_pairlist'.
-        In other words, a single value here will generate multiple features in the model.
         
-        PHASE 3: Proper Feature Engineering
-        ====================================
-        Nguyên tắc:
-        1. Không dùng giá trị tuyệt đối → Dùng biến thiên (Delta/Slope/Distance)
-        2. Tránh indicators bị lag → Ưu tiên Oscillators, Volume
-        3. Log Returns là VUA → Chuẩn hóa giá về dao động quanh 0
-        4. Stationary features → RSI, %, độ biến động (không phải giá thô)
+        expand_all: Features ở đây KHÔNG được tự động nhân bản cho các timeframes khác.
+        Chỉ dùng cho các features đặc thù của 1 timeframe hoặc khó scale.
         
-        Features:
-        - Log Returns (1, 5, 10, 20 periods)
-        - EMA Distance & Slopes (không phải EMA thô)
-        - Momentum Oscillators (RSI, Williams %R, CCI - đã chuẩn hóa)
-        - Volume (OBV, CMF, MFI, Volume Ratio)
-        - Volatility (ATR%, BB Width, BB Position)
-        - Candle Patterns (body size, shadow, streak)
-        - Support/Resistance distances
+        Đặt ở đây:
+        - Chart Patterns (khó scale đa khung)
+        - SMC Indicators (đặc thù SMC)
+        - Data Enhancement (API-based, không cần đa khung)
+        - Market Regime Detection (tổng hợp cuối cùng)
         """
         
-        # ==== PHASE 3: Proper Feature Engineering ====
-        # Thêm tất cả features đã được chuẩn hóa đúng cách cho ML
-        dataframe = FeatureEngineering.add_all_features(dataframe)
-        # =============================================
-        
-        # ==== PHASE 3: Chart Pattern Recognition ====
+        # ==== Chart Pattern Recognition ====
         # Nhận dạng các mô hình giá: Double Top/Bottom, Head & Shoulders, Wedge, Triangle, Flag
+        # Khó scale đa khung vì logic phức tạp
         dataframe = ChartPatterns.add_all_patterns(dataframe)
-        # =============================================
         
-        # Add SMC, Sonic R, Moon Phases (giữ lại các features hữu ích)
+        # ==== SMC Indicators ====
+        # Sonic R, EMA 369/630, Moon Phases - đặc thù SMC strategy
         dataframe = SMCIndicators.add_all_indicators(dataframe)
         
-        # ==== PHASE 2: Data Enhancement Features ====
+        # ==== Data Enhancement (Phase 2) ====
+        # Fear & Greed Index, Volume Imbalance, Funding Proxy
+        # API-based features, không cần đa khung
         dataframe = DataEnhancement.add_all_features(dataframe, period=period)
-        # ============================================
 
-        # Legacy indicators (để tương thích ngược)
-        # Nhưng giờ đã có trong FeatureEngineering, có thể bỏ sau
+        # ==== Legacy indicators (cho Market Regime) ====
         dataframe['mfi'] = ta.mfi(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'])
         dataframe['adx'] = ta.adx(dataframe['high'], dataframe['low'], dataframe['close'])['ADX_14']
         dataframe['rsi'] = ta.rsi(dataframe['close'])
@@ -242,7 +227,7 @@ class FreqAIStrategy(IStrategy):
             dataframe["bb_upperband"] - dataframe["bb_lowerband"]
         ) / dataframe["bb_middleband"]
         
-        # Detect Market Regime (after all indicators are available)
+        # ==== Market Regime Detection (cuối cùng) ====
         dataframe = self.detect_market_regime(dataframe)
 
         return dataframe
@@ -250,31 +235,25 @@ class FreqAIStrategy(IStrategy):
     def feature_engineering_expand_basic(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
         """
         *Only functional with FreqAI enabled strategies*
-        This function will automatically expand the defined features on the config defined
-        `include_timeframes`, `include_shifted_candles`, and `include_corr_pairlist`.
-        In other words, a single feature defined in this function
-        will automatically expand to a total of
-        `include_timeframes` * `include_shifted_candles` * `include_corr_pairlist`
-        numbers of features added to the model.
-
-        Features defined here will *not* be automatically multiplied by
-        `indicator_periods_candles`
-
-        All features must be prepended with `%` to be recognized by FreqAI internals.
         
-        NOTE: Đã xóa các features vi phạm nguyên tắc Stationarity:
-        - %-raw_price: Giá thô ($90,000) → Model không tổng quát hóa được
-        - %-raw_volume: Volume thô → Cần chuẩn hóa
-        - %-pct-change: Dư thừa vì đã có Log Returns ở feature_engineering.py
+        expand_basic: Features ở đây SẼ ĐƯỢC TỰ ĐỘNG NHÂN BẢN cho các timeframes khác!
+        FreqAI sẽ tạo ra: %-log_return_1_5m, %-log_return_1_1h, %-log_return_1_4h, v.v.
         
-        Các features này đã được thay thế bởi các features đúng chuẩn trong 
-        FeatureEngineering.add_all_features()
+        ĐÂY LÀ NƠI ĐẶT CORE FEATURES:
+        - Log Returns (quan trọng nhất)
+        - EMA Distance & Slopes
+        - Momentum Oscillators (RSI, Williams %R, CCI)
+        - Volume Features (OBV, CMF, MFI, VWAP)
+        - Volatility (ATR%, BB Width)
+        - Candle Patterns
+        - Support/Resistance
+        
+        Kết quả: Bot sẽ học từ 5m + 1h + 4h (Multi-timeframe Analysis)
         """
-        # Không thêm features thô ở đây
-        # Tất cả features đã được xử lý đúng trong feature_engineering.py:
-        # - %-log_return_* (thay cho pct-change, tốt hơn vì có tính cộng)
-        # - %-volume_ratio (volume / volume_ma, thay cho raw_volume)
-        # - %-dist_to_ema_* (thay cho raw_price)
+        # ==== CORE FEATURE ENGINEERING ====
+        # Tất cả features sẽ được expand cho 5m, 1h, 4h
+        dataframe = FeatureEngineering.add_all_features(dataframe)
+        
         return dataframe
 
     def feature_engineering_standard(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
