@@ -1,4 +1,3 @@
-version: '3'
 services:
   freqtrade:
     build: .
@@ -9,6 +8,8 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - "./user_data:/freqtrade/user_data"
+      - "./scripts:/scripts:ro"
+    entrypoint: ["/bin/bash", "/scripts/entrypoint.sh"]
     # Default command, can be overridden
     command: >
       trade

@@ -17,6 +17,28 @@ import pandas_ta as ta
 from typing import Tuple, Optional
 
 
+def safe_atr(high, low, close, length=14) -> pd.Series:
+    """Safely calculate ATR, returning NaN series if insufficient data"""
+    try:
+        atr = ta.atr(high, low, close, length=length)
+        if atr is None:
+            return pd.Series(np.nan, index=high.index)
+        return atr.replace(0, np.nan)
+    except Exception:
+        return pd.Series(np.nan, index=high.index)
+
+
+def safe_ema(series, length=20) -> pd.Series:
+    """Safely calculate EMA, returning NaN series if insufficient data"""
+    try:
+        ema = ta.ema(series, length=length)
+        if ema is None:
+            return pd.Series(np.nan, index=series.index)
+        return ema
+    except Exception:
+        return pd.Series(np.nan, index=series.index)
+
+
 class WaveIndicators:
     """
     Elliott Wave Lite - Objective features for AI
@@ -154,8 +176,7 @@ class WaveIndicators:
         ao = median_price.rolling(5).mean() - median_price.rolling(34).mean()
         
         # Normalize AO by ATR for comparability
-        atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-        atr = atr.replace(0, np.nan)
+        atr = safe_atr(df['high'], df['low'], df['close'], length=14)
         
         df[f'{prefix}%-wave_ao'] = ao / atr
         
@@ -227,12 +248,12 @@ class WaveIndicators:
             df[f'{prefix}%-wave_strength'] = 0.5
         
         # Exhaustion signal (very high momentum + divergence)
-        atr = ta.atr(high, low, close, length=14)
-        atr = atr.replace(0, np.nan)
+        atr = safe_atr(high, low, close, length=14)
         
         # Price extension from mean
-        ema20 = ta.ema(close, length=20)
+        ema20 = safe_ema(close, length=20)
         extension = (close - ema20) / atr
+        extension = extension.fillna(0)
         
         # Exhaustion when price extended + AO diverging
         df[f'{prefix}%-wave_exhaustion_up'] = ((extension > 2) & df[f'{prefix}%-wave_bearish_div']).astype(float)
@@ -284,8 +305,7 @@ class WaveIndicators:
         df[f'{prefix}%-wave_swing_position'] = (close - swing_low) / swing_range
         
         # Swing size relative to ATR (wave magnitude)
-        atr = ta.atr(high, low, close, length=14)
-        atr = atr.replace(0, np.nan)
+        atr = safe_atr(high, low, close, length=14)
         df[f'{prefix}%-wave_swing_size'] = swing_range / atr
         
         # Impulse vs Corrective proxy

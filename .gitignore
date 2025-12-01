@@ -81,3 +81,5 @@ logs/
 # Config with API keys
 user_data/config.json
 
+user_data/models_backup_*/
+user_data/backtest_results/*.zip

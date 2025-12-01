@@ -305,19 +305,96 @@ dataframe['%-log_return_1'] = np.log(close / close.shift(1))
 
 ## Quyết Định Đang Chờ
 
-### Quyết Định 011: Điều Chỉnh Ngưỡng Xu Hướng
-**Trạng thái**: 🔄 Đang xem xét
+### Quyết Định 013: Feature Mismatch Resolution
+**Ngày**: 2025-12-01  
+**Trạng thái**: 🔄 ĐANG CHỜ USER QUYẾT ĐỊNH
 
-Có nên nới lỏng ngưỡng để bắt nhiều lệnh hơn?
-- Hiện tại: ADX > 25, BB Width > 0.04
-- Tùy chọn: ADX > 20, BB Width > 0.03
+### Bối Cảnh
+Sau khi fix 2 bugs, models cũ không compatible với code mới vì wave_indicators.py có thêm null safety checks.
 
-### Quyết Định 012: Tích Hợp Model Pretrained
+### Các Lựa Chọn
+1. **Retrain từ đầu** - Giữ tất cả fixes, train ~2-3 giờ
+2. **Revert wave_indicators** - Chỉ giữ fix custom_stoploss, test ngay được
+
+### Quyết Định
+**Đang chờ user chọn**
+
+---
+
+## Quyết Định 012: Custom Stoploss Bug Fix
+**Ngày**: 2025-12-01  
+**Trạng thái**: ✅ Đã triển khai
+
+### Bối Cảnh
+Backtest cho thấy 33 trades bị stop với 0% win rate, gây -91 USDT loss. Debug phát hiện `custom_stoploss()` tạo ra trailing effect không mong muốn.
+
+### Root Cause Analysis
+```python
+# Line 136 trong FreqAIStrategy.py
+# TRƯỚC (BUG): Dùng current_rate
+dynamic_sl = -self.atr_multiplier.value * (atr / current_rate)
+
+# Khi price tăng từ 40000 → 45000:
+# SL mới = -3 * (2000 / 45000) = -13.3% (TIGHTER!)
+# → Stoploss tự động siết lại như trailing stop
+```
+
+### Quyết Định
+**Fix:** Đổi `current_rate` → `trade.open_rate`
+
+### Triển Khai
+```python
+# SAU (FIXED): Dùng trade.open_rate
+dynamic_sl = -self.atr_multiplier.value * (atr / trade.open_rate)
+
+# Price dù tăng từ 40000 → 45000:
+# SL = -3 * (2000 / 40000) = -15% (FIXED relative to entry)
+```
+
+### Lý Do
+- `current_rate` thay đổi liên tục → SL cũng đổi → trailing effect
+- `trade.open_rate` cố định → SL cố định relative to entry
+- Không cần retrain vì `custom_stoploss()` là runtime logic
+
+---
+
+### Quyết Định 013: Tích Hợp Model Pretrained
 **Trạng thái**: 🔜 Tương lai
 
 Khi nào thêm phân tích sentiment FinBERT?
 - Trong giai đoạn BUILD trên GCP (cần GPU)
 - Sau đó export model chạy local (CPU mode)
+
+---
+
+## Quyết Định 011: Makefile Safety Features
+**Ngày**: 2025-12-01  
+**Trạng thái**: ✅ Đã triển khai
+
+### Bối Cảnh
+Models bị mất vì xóa trước khi backup. User đã train xong model -1.81% loss nhưng xóa để chạy hyperopt mà chưa backup.
+
+### Quyết Định
+**Thêm auto-backup vào các Makefile targets nguy hiểm:**
+
+### Triển Khai
+```makefile
+# hyperopt tự động backup trước và sau
+hyperopt: backup-models
+    @echo "🚀 Starting hyperopt..."
+    ...
+    ./scripts/backup_to_drive.sh models  # backup sau
+
+# clean-models yêu cầu confirm
+clean-models: backup-models
+    @read -p "Delete all models? (yes/no): " confirm
+    rm -rf user_data/models/*
+```
+
+### Lý Do
+- Tránh mất models do thao tác nhầm
+- Backup tự động trước khi xóa
+- Confirm step cho các thao tác nguy hiểm
 
 ---
 

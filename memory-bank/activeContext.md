@@ -1,28 +1,58 @@
 # Ngữ Cảnh Hiện Tại - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 16:55:00] - FreqAI Training FIX HOÀN THÀNH
+[2025-12-01 10:05:00] - Đang xử lý feature mismatch issue
 
 ## 1. Trọng Tâm Hiện Tại
 
-**Giai Đoạn**: Phase 4 - Kiến Trúc AI Nâng Cao  
-**Trạng Thái**: FreqAI Training FIX ĐÃ XONG → Sẵn sàng TRAIN MODEL
+**Giai Đoạn**: Phase 4.3 - Bug Fixing & Backtest Verification  
+**Trạng Thái**: ⚠️ BLOCKED - Models không khớp với code mới
 
-## 2. Thành Tựu Gần Đây
+## 2. Bugs Đã Fix Trong Session Này
 
-### FreqAI Training Fix (HOÀN THÀNH) ✅ [2025-11-30 16:55]
+### ✅ Bug 1: Custom Stoploss Trailing Effect (CRITICAL - Đã Fix)
+**File:** `FreqAIStrategy.py` line 136  
+**Vấn đề:** Dùng `current_rate` → trailing effect → -91 USDT loss từ 33 trades  
+**Fix:** Đổi `current_rate` → `trade.open_rate`  
+**Impact:** KHÔNG cần retrain (runtime logic)
 
-**ROOT CAUSE:** `populate_indicators()` không gọi `self.freqai.start()` → FreqAI không bao giờ train!
+### ✅ Bug 2: ATR/EMA None Check (Đã Fix nhưng gây incompatibility)
+**File:** `wave_indicators.py`  
+**Vấn đề:** `ta.atr()` trả về None khi không đủ data → crash  
+**Fix:** Thêm helper functions `safe_atr()` và `safe_ema()`  
+**Impact:** CẦN retrain vì thay đổi code flow
 
-**FIXES:**
-1. Added `dataframe = self.freqai.start(dataframe, metadata, self)` to populate_indicators
-2. Renamed `pandas_ta as pta` to avoid import conflict with `talib.abstract as ta`
-3. Fixed talib syntax (uppercase: MFI, ADX, RSI, BBANDS, ATR)
-4. Fixed numpy array `.diff()` error - convert to pd.Series first
+## 3. Tình Trạng Hiện Tại
 
-**FILES MODIFIED:**
-- `FreqAIStrategy.py` - populate_indicators, imports
-- `feature_engineering.py` - numpy to pandas conversion
+### ⚠️ Feature Mismatch Issue
+- Models đã train với code cũ (wave_indicators.py chưa có safe_atr)
+- Code mới có thêm null safety checks
+- FreqAI báo lỗi: "different features furnished by current strategy"
+
+### 🎯 Lựa Chọn:
+| Option | Mô tả | Thời gian |
+|--------|-------|-----------|
+| **Option 1** | Retrain từ đầu với code mới | ~2-3 giờ |
+| **Option 2** | Revert wave_indicators, chỉ giữ fix custom_stoploss | Ngay lập tức |
+
+### Models Available (Google Drive):
+- `models_20251201_074154` - 467 MB (96 models, 1-year data)
+- `models_20251201_000849` - 445 MB
+- `models_20251130_180612` - 211 MB
+
+## 4. Thành Tựu Trước Đó
+
+### Training Results Analysis ✅ [2025-11-30]
+
+**KẾT QUẢ:** -1.81% loss (64 trades, 46.9% win rate)
+
+| Exit Reason | Trades | Profit | Win Rate |
+|-------------|--------|--------|----------|
+| roi | 28 | +80.27 USDT | 100% ✅ |
+| trailing_stop_loss | 33 | -91.32 USDT | 0% ❌ |
+| exit_signal | 3 | -7.07 USDT | 0% |
+
+**ROOT CAUSE:** `custom_stoploss()` dùng `current_rate` → trailing effect
 
 ### Phase 3: Feature Engineering Refactor (HOÀN THÀNH) ✅ [2025-11-30 16:00]
 
@@ -63,10 +93,20 @@
 
 ## 3. Trạng Thái Hiện Tại
 
-### Sẵn Sàng Cho:
-- ✅ Train FreqAI model mới với ~65 features đúng chuẩn
-- ✅ Hyperopt optimization
-- ✅ Backtest để đánh giá hiệu quả
+### Hyperopt Đang Chạy:
+```bash
+make hyperopt
+# --epochs 500
+# --hyperopt-loss SortinoHyperOptLossDaily  
+# --spaces buy sell roi stoploss
+# --timerange 20231201-20241101
+```
+
+### Model Config:
+- **Identifier:** `freqai-xgboost-v2-stationary`
+- **Model:** XGBoostRegressor (n_est=800, depth=7, lr=0.03)
+- **Training:** 48 timeranges × 2 pairs (BTC, ETH)
+- **Features:** ~400+ (expand_basic × 3 TFs + expand_all)
 
 ### Thay Đổi Cấu Hình Hiện Tại
 - `config.json`: `"use_custom_stoploss": true`
@@ -75,27 +115,16 @@
 
 ## 4. Bước Tiếp Theo
 
-### Ưu Tiên 1: Train FreqAI Model Mới
-Để model học các features Phase 3 mới:
-```bash
-docker compose run --rm freqtrade backtesting \
-  --strategy FreqAIStrategy \
-  --timerange 20251001-20251130 \
-  --freqaimodel XGBoostClassifier
-```
+### Sau Khi Hyperopt Xong:
+1. **Xem kết quả:** `make hyperopt-show`
+2. **Apply best params:** Export vào strategy hoặc config
+3. **Backtest với optimized params:** `make backtest-optimized`
+4. **Fix custom_stoploss:** Đổi `current_rate` → `trade.open_rate`
 
-### Ưu Tiên 2: Hyperopt Optimization
-```bash
-docker compose run --rm freqtrade hyperopt \
-  --strategy FreqAIStrategy \
-  --hyperopt-loss SharpeHyperOptLoss \
-  --epochs 50 \
-  --freqaimodel XGBoostClassifier
-```
-
-### Ưu Tiên 3: Phase 4.4 Pretrained Models
-- Nghiên cứu FinBERT, TimeGPT
-- Ensemble với XGBoost hiện tại
+### Ưu Tiên Tiếp Theo:
+1. **Dry-run paper trading:** `make dry-run`
+2. **Test LightGBM/CatBoost:** `make test-lightgbm`
+3. **Live trading (sau khi confident):** `make live`
 
 ## 5. Câu Hỏi Mở
 
@@ -105,6 +134,11 @@ docker compose run --rm freqtrade hyperopt \
 
 ## 6. Trở Ngại
 
-~~FreqAI không train~~ → **SOLVED!** Thiếu `self.freqai.start()` trong populate_indicators.
+### ⚠️ Custom Stoploss Issue (CẦN FIX)
+- `custom_stoploss()` dùng `current_rate` → trailing effect
+- **Impact:** -91 USDT loss từ 33 trades bị stop
+- **Fix:** Đổi `current_rate` → `trade.open_rate` trong FreqAIStrategy.py line 137
 
-**Hiện tại không có trở ngại.** Code đã sẵn sàng để train.
+### ✅ Đã Giải Quyết:
+- ~~FreqAI không train~~ → Fixed `self.freqai.start()`
+- ~~Models bị mất~~ → Added auto-backup to Makefile

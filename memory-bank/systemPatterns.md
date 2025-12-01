@@ -1,7 +1,57 @@
 # Mẫu Thiết Kế Hệ Thống - AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 14:45:00] - Chuyển sang tiếng Việt
+[2025-12-01 11:01:00] - Thêm quy tắc tránh interrupt background processes
+
+## 0. QUY TẮC BẮT BUỘC ⚠️
+
+### Không Interrupt Background Processes ❌❌❌
+**NGHIÊM CẤM** chạy bất kỳ lệnh nào trong terminal đang chạy background process (training, etc.):
+
+```bash
+# ❌ TUYỆT ĐỐI KHÔNG - Sẽ gửi Ctrl+C interrupt process
+# Terminal đang chạy "make train"...
+cat /some/file.json  # ← Điều này sẽ kill training!
+
+# ✅ ĐÚNG - Mở terminal MỚI hoặc dùng get_terminal_output
+# Chỉ dùng get_terminal_output để check status
+# Muốn chạy lệnh khác → mở terminal mới
+```
+
+**Lý do:** Bất kỳ input nào vào terminal đang có background process đều có thể interrupt nó.
+
+### Luôn Dùng Makefile
+**KHÔNG BAO GIỜ** chạy docker commands trực tiếp. Luôn dùng Makefile targets:
+
+```bash
+# ❌ SAI - Không làm thế này
+docker compose run --rm freqtrade backtesting ...
+
+# ✅ ĐÚNG - Luôn dùng make
+make backtest           # Backtest cơ bản
+make train              # Train models
+make hyperopt           # Hyperopt optimization
+make dry-run            # Paper trading
+make live               # Live trading
+make backup-models      # Backup models lên Google Drive
+make clean-models       # Xóa models (có auto-backup)
+```
+
+**Lý do:**
+- Makefile có auto-backup trước các thao tác nguy hiểm
+- Đảm bảo consistent parameters
+- Logging tự động
+- Error handling
+
+### Makefile Targets Quan Trọng
+| Target | Mô tả | Safety |
+|--------|-------|--------|
+| `make backtest` | Backtest với FreqAI | - |
+| `make train` | Train models | Auto-backup |
+| `make hyperopt` | Hyperopt 500 epochs | Auto-backup before & after |
+| `make clean-models` | Xóa models | Auto-backup + Confirm |
+| `make backup-models` | Backup lên Google Drive | Versioned |
+| `make logs` | Xem logs | - |
 
 ## 1. Mẫu Kiến Trúc
 

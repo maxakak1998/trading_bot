@@ -1,7 +1,7 @@
 # Theo Dõi Tiến Độ - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-11-30 16:55:00] - FreqAI Training FIX HOÀN THÀNH - Sẵn sàng train
+[2025-12-01 10:05:00] - Đang xử lý feature mismatch issue sau khi fix bugs
 
 ---
 
@@ -12,10 +12,40 @@
 | Phase 1: Setup | ✅ HOÀN THÀNH | 5/5 tasks |
 | Phase 2: Phát triển Strategy | ✅ HOÀN THÀNH | 3/3 tasks |
 | Phase 3: Tích hợp FreqAI | ✅ HOÀN THÀNH | 4/4 tasks |
-| Phase 4: AI Nâng Cao | 🔄 ĐANG LÀM | 9/12 tasks |
-| Infrastructure: Backup | ✅ HOÀN THÀNH | Google Drive ready |
+| Phase 4: AI Nâng Cao | ⚠️ BLOCKED | Feature mismatch |
+| Phase 5: GCP Cloud | ⏳ READY | Scripts prepared |
+| Infrastructure: Backup | ✅ HOÀN THÀNH | Auto-backup enabled |
 
-**Tổng thể**: ~75% hoàn thành
+**Tổng thể**: ~85% hoàn thành (blocked by feature mismatch)
+
+---
+
+## Đang Thực Hiện 🔄
+
+### ⚠️ Feature Mismatch Issue (2025-12-01 10:05)
+
+**VẤN ĐỀ:**
+- Models train với code cũ (wave_indicators.py không có safe_atr)
+- Code mới có thêm null safety checks → features khác
+- FreqAI báo lỗi: "different features furnished by current strategy"
+
+**BUGS ĐÃ FIX:**
+| Bug | File | Fix | Cần Retrain? |
+|-----|------|-----|--------------|
+| Custom Stoploss Trailing | FreqAIStrategy.py:136 | `current_rate` → `trade.open_rate` | ❌ Không |
+| ATR/EMA None Check | wave_indicators.py | Thêm `safe_atr()`, `safe_ema()` | ✅ **CẦN** |
+
+**LỰA CHỌN:**
+- **Option 1:** Retrain từ đầu (~2-3 giờ) - giữ tất cả fixes
+- **Option 2:** Revert wave_indicators, chỉ giữ fix custom_stoploss (test ngay)
+
+### Training Session Trước (HOÀN THÀNH - 2025-11-30)
+
+**KẾT QUẢ:** -1.81% loss (64 trades, 46.9% win rate)
+- ROI exits: +80.27 USDT (28 trades, 100% win) ✅
+- trailing_stop_loss exits: -91.32 USDT (33 trades, 0% win) ❌
+
+**ROOT CAUSE:** `custom_stoploss()` dùng `current_rate` thay vì `trade.open_rate`
 
 ---
 
@@ -59,40 +89,36 @@
 
 ## Đang Thực Hiện 🔄
 
-### ✅ FreqAI Training FIX (HOÀN THÀNH - 2025-11-30 16:55)
+### 🔄 Hyperopt Optimization (ĐANG CHẠY - 2025-12-01 00:21)
 
-**VẤN ĐỀ ĐÃ FIX:**
-1. ✅ `populate_indicators()` thiếu `self.freqai.start()` → FIXED
-2. ✅ Import conflict: `pandas_ta as ta` bị override → FIXED (renamed to `pta`)
-3. ✅ Talib syntax: viết hoa (MFI, ADX, RSI, BBANDS) → FIXED
-4. ✅ Numpy array `.diff()` error trong feature_engineering.py → FIXED (convert to pd.Series)
-
-**CODE CHANGES:**
-```python
-# 1. FreqAIStrategy.py - populate_indicators
-def populate_indicators(self, dataframe, metadata):
-    dataframe = self.freqai.start(dataframe, metadata, self)  # CRITICAL!
-    return dataframe
-
-# 2. FreqAIStrategy.py - imports
-import pandas_ta as pta  # renamed to avoid conflict
-import talib.abstract as ta  # talib for FreqAI
-
-# 3. feature_engineering.py - numpy to pandas fix
-ema = pd.Series(ta.EMA(...), index=dataframe.index)  # Convert numpy to pd.Series
-obv = pd.Series(ta.OBV(...), index=dataframe.index)
-rsi = pd.Series(ta.RSI(...), index=dataframe.index)
-```
-
-**SẴN SÀNG TRAIN:**
+**COMMAND:**
 ```bash
-docker compose run --rm freqtrade backtesting \
-  --strategy FreqAIStrategy \
-  --timerange 20240601-20241101 \
-  --freqaimodel XGBoostClassifier
+make hyperopt  # 500 epochs, SortinoHyperOptLossDaily
 ```
-- 22 timeranges × 2 pairs = 44 total trains
-- Features: ~400+ (expand_basic × 3 TFs + expand_all)
+
+**TIẾN ĐỘ:**
+- ✅ Models cũ đã backup lên Google Drive (445 MB)
+- ✅ Models đã xóa clean
+- 🔄 Training 48 timeranges × 2 pairs = 96 models
+- ⏳ Sau đó chạy 500 epochs hyperopt
+
+**SPACES ĐANG OPTIMIZE:**
+- `buy`: buy_pred_threshold, buy_rsi_low/high, buy_adx_threshold, confidence_threshold
+- `sell`: sell_pred_threshold, sell_rsi_threshold  
+- `roi`: minimal_roi table
+- `stoploss`: stoploss value, atr_multiplier
+
+**DỰ KIẾN:** ~1-2 giờ (train + hyperopt)
+
+### ✅ Training Session Trước (HOÀN THÀNH - 2025-11-30)
+
+**KẾT QUẢ:** -1.81% loss (64 trades)
+- ROI exits: +80.27 USDT (28 trades, 100% win)
+- trailing_stop_loss exits: -91.32 USDT (33 trades, 0% win)
+
+**ROOT CAUSE:** `custom_stoploss()` dùng `current_rate` thay vì `trade.open_rate` → trailing effect
+
+**BÀI HỌC:** Models bị mất vì xóa trước khi backup → Đã thêm auto-backup vào Makefile
 
 ### Phase 4: Kiến Trúc AI Nâng Cao
 - [x] Thiết kế tài liệu kiến trúc
@@ -171,6 +197,57 @@ docker compose run --rm freqtrade backtesting \
 - [ ] Task 4.2: Ensemble Model
   - Kết hợp XGBoost + Sentiment
   - Triển khai weighted averaging
+
+---
+
+## Phase 5: $300 GCP Cloud Pipeline ✅ HOÀN THÀNH [2025-11-30 18:30]
+
+### Files Created:
+| File | Purpose |
+|------|---------|
+| `docs/gcp-pipeline-plan.md` | Master plan with all steps |
+| `user_data/configs/config-lightgbm.json` | LightGBM model config |
+| `user_data/configs/config-catboost.json` | CatBoost model config |
+| `scripts/gcp/setup-project.sh` | GCP project initialization |
+| `scripts/gcp/create-hyperopt-vm.sh` | Spot VM for hyperopt (c2-standard-60) |
+| `scripts/gcp/create-tournament.sh` | 3 VMs for model comparison |
+| `scripts/gcp/create-live-vm.sh` | Production VM (e2-small) |
+| `scripts/gcp/deploy.sh` | Deploy to cloud |
+| `scripts/gcp/teardown.sh` | Delete VMs to save cost |
+
+### Makefile Commands:
+```bash
+# Local Testing
+make test-lightgbm    # Test LightGBM on Mac
+make test-catboost    # Test CatBoost on Mac
+make compare-models   # Compare backtest results
+
+# GCP Cloud
+make gcp-setup        # Setup GCP project
+make gcp-hyperopt     # Create Spot VM for hyperopt
+make gcp-tournament   # Create 3 VMs for model tournament
+make gcp-live         # Create production VM
+make gcp-deploy       # Deploy to production
+make gcp-teardown     # Delete all VMs (save $$$)
+make gcp-status       # Check VM status
+```
+
+### Budget Allocation (Optimized with Spot VMs):
+| Phase | VM Type | Est. Cost |
+|-------|---------|-----------|
+| Hyperopt | c2-standard-60 Spot | $45 |
+| Tournament | c2-standard-16 x3 Spot | $24 |
+| Stress Test | e2-highmem-8 | $3 |
+| Live VPS (5 months) | e2-small | $72 |
+| Buffer | - | $56 |
+| **TOTAL** | | **$200** |
+
+### Next Steps:
+1. ✅ Wait for current training to complete
+2. ⬜ Test LightGBM on Mac: `make test-lightgbm`
+3. ⬜ Test CatBoost on Mac: `make test-catboost`
+4. ⬜ Setup GCP: `make gcp-setup`
+5. ⬜ Run cloud hyperopt
 
 ---
 
