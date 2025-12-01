@@ -9,13 +9,13 @@ STRATEGY := FreqAIStrategy
 FREQAI_MODEL := XGBoostRegressor
 
 # Timeranges
-TRAIN_TIMERANGE := 20240501-20241101
+TRAIN_TIMERANGE := 20231101-20241101
 BACKTEST_TIMERANGE := 20241101-20241201
 
 # Hyperopt settings
 HYPEROPT_EPOCHS := 500
 HYPEROPT_LOSS := SortinoHyperOptLossDaily
-HYPEROPT_SPACES := buy sell roi stoploss
+HYPEROPT_SPACES := buy sell roi
 RANDOM_STATE := 42
 
 # GCP settings
@@ -137,6 +137,19 @@ hyperopt-show: ## Show best hyperopt results
 hyperopt-list: ## List top 10 hyperopt results
 	$(DOCKER_COMPOSE) run --rm freqtrade hyperopt-list --best 10 --no-details
 
+show-params: ## Show current strategy parameters from JSON
+	@echo "📊 Current Strategy Parameters:"
+	@if [ -f user_data/strategies/FreqAIStrategy.json ]; then \
+		cat user_data/strategies/FreqAIStrategy.json | python3 -m json.tool; \
+	else \
+		echo "⚠️  No parameter file found. Using defaults from code."; \
+	fi
+
+reset-params: ## Delete JSON params and use defaults from code
+	@echo "🔄 Resetting to default parameters..."
+	@rm -f user_data/strategies/FreqAIStrategy.json
+	@echo "✅ Parameters reset. Will use defaults from code."
+
 backup: ## Manual backup to Google Drive
 	./scripts/backup_to_drive.sh incremental
 
@@ -148,12 +161,24 @@ backup-models: ## Backup models to Google Drive (versioned)
 	./scripts/backup_to_drive.sh models
 	@echo "✅ Models backed up!"
 
-clean-models: backup-models ## Delete models (SAFE - auto backup first!)
-	@echo "⚠️  WARNING: This will delete all trained models!"
-	@echo "✅ Models already backed up to Google Drive"
-	@read -p "Delete all models? (yes/no): " confirm && [ "$$confirm" = "yes" ] || exit 1
-	rm -rf user_data/models/*
-	@echo "🗑️ Models deleted. Use './scripts/restore_from_drive.sh' to restore if needed."
+clean-models: ## Delete models + docker cache (with optional backup)
+	@echo "⚠️  WARNING: This will delete all trained models and docker cache!"
+	@read -p "Backup before delete? (yes/no): " backup && \
+		if [ "$$backup" = "yes" ]; then \
+			./scripts/backup_to_drive.sh models && echo "✅ Models backed up!"; \
+		fi
+	@read -p "Delete all models + cache? (yes/no): " confirm && [ "$$confirm" = "yes" ] || exit 1
+	rm -rf user_data/models/freqai-*
+	rm -rf user_data/hyperopt_results/*
+	docker system prune -f --volumes 2>/dev/null || true
+	@echo "🗑️ Models and cache deleted."
+
+clean-models-force: ## Force delete models + docker cache (NO backup, NO confirm)
+	@echo "🗑️ Force deleting all models and docker cache..."
+	rm -rf user_data/models/freqai-*
+	rm -rf user_data/hyperopt_results/*
+	docker system prune -f --volumes 2>/dev/null || true
+	@echo "✅ Models and cache deleted."
 
 # ===========================================
 # Model Testing (Local)

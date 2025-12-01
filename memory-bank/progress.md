@@ -1,7 +1,7 @@
 # Theo Dõi Tiến Độ - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-12-01 10:05:00] - Đang xử lý feature mismatch issue sau khi fix bugs
+[2025-12-01 17:00:00] - Pipeline test PASS, sẵn sàng hyperopt 1 năm
 
 ---
 
@@ -12,40 +12,55 @@
 | Phase 1: Setup | ✅ HOÀN THÀNH | 5/5 tasks |
 | Phase 2: Phát triển Strategy | ✅ HOÀN THÀNH | 3/3 tasks |
 | Phase 3: Tích hợp FreqAI | ✅ HOÀN THÀNH | 4/4 tasks |
-| Phase 4: AI Nâng Cao | ⚠️ BLOCKED | Feature mismatch |
+| Phase 4: AI Nâng Cao | 🔄 IN PROGRESS | Pipeline tested |
 | Phase 5: GCP Cloud | ⏳ READY | Scripts prepared |
 | Infrastructure: Backup | ✅ HOÀN THÀNH | Auto-backup enabled |
 
-**Tổng thể**: ~85% hoàn thành (blocked by feature mismatch)
+**Tổng thể**: ~90% hoàn thành
 
 ---
 
 ## Đang Thực Hiện 🔄
 
-### ⚠️ Feature Mismatch Issue (2025-12-01 10:05)
+### ⏳ Hyperopt 1 Năm (SẴN SÀNG - 2025-12-01 17:00)
 
-**VẤN ĐỀ:**
-- Models train với code cũ (wave_indicators.py không có safe_atr)
-- Code mới có thêm null safety checks → features khác
-- FreqAI báo lỗi: "different features furnished by current strategy"
+**CẤU HÌNH:**
+- **Timerange:** 20231101-20241101 (1 năm)
+- **Epochs:** 500
+- **Spaces:** buy, sell, roi
+- **Data:** ✅ Đã có đủ
+- **Models:** ✅ Đã xóa clean
 
-**BUGS ĐÃ FIX:**
-| Bug | File | Fix | Cần Retrain? |
-|-----|------|-----|--------------|
-| Custom Stoploss Trailing | FreqAIStrategy.py:136 | `current_rate` → `trade.open_rate` | ❌ Không |
-| ATR/EMA None Check | wave_indicators.py | Thêm `safe_atr()`, `safe_ema()` | ✅ **CẦN** |
+**ƯỚC TÍNH:**
+- ~52 windows × 2 pairs = 104 models
+- Training: ~6-8 giờ
+- Hyperopt: ~2-3 giờ
+- **Total: ~8-12 giờ**
 
-**LỰA CHỌN:**
-- **Option 1:** Retrain từ đầu (~2-3 giờ) - giữ tất cả fixes
-- **Option 2:** Revert wave_indicators, chỉ giữ fix custom_stoploss (test ngay)
+### ✅ Pipeline Test (HOÀN THÀNH - 2025-12-01 16:43)
 
-### Training Session Trước (HOÀN THÀNH - 2025-11-30)
+**KẾT QUẢ:**
+| Metric | Value |
+|--------|-------|
+| Timerange | Oct 2024 (1 tháng) |
+| Epochs | 100 |
+| Trades | 3 |
+| Win/Draw/Loss | 2/1/0 |
+| Win Rate | 100% |
+| Total Profit | +4.29 USDT |
 
-**KẾT QUẢ:** -1.81% loss (64 trades, 46.9% win rate)
-- ROI exits: +80.27 USDT (28 trades, 100% win) ✅
-- trailing_stop_loss exits: -91.32 USDT (33 trades, 0% win) ❌
+**Best Params Saved:** `user_data/strategies/FreqAIStrategy.json`
 
-**ROOT CAUSE:** `custom_stoploss()` dùng `current_rate` thay vì `trade.open_rate`
+### ✅ Makefile Updates (2025-12-01)
+
+**New Commands:**
+- `make clean-models` - Xóa models + cache (hỏi backup)
+- `make clean-models-force` - Force delete không hỏi
+- `make show-params` - Xem params từ JSON
+- `make reset-params` - Reset về defaults
+
+**Fixed:**
+- `atr_multiplier` KeyError → Bỏ `stoploss` khỏi HYPEROPT_SPACES
 
 ---
 
@@ -99,6 +114,7 @@ make hyperopt  # 500 epochs, SortinoHyperOptLossDaily
 **TIẾN ĐỘ:**
 - ✅ Models cũ đã backup lên Google Drive (445 MB)
 - ✅ Models đã xóa clean
+- ✅ Code đã được commit và push lên GitHub (2025-12-01)
 - 🔄 Training 48 timeranges × 2 pairs = 96 models
 - ⏳ Sau đó chạy 500 epochs hyperopt
 

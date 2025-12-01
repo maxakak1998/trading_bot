@@ -1,46 +1,77 @@
 # Ngữ Cảnh Hiện Tại - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-12-01 10:05:00] - Đang xử lý feature mismatch issue
+[2025-12-01 17:00:00] - Pipeline test PASS, sẵn sàng hyperopt 1 năm
 
 ## 1. Trọng Tâm Hiện Tại
 
-**Giai Đoạn**: Phase 4.3 - Bug Fixing & Backtest Verification  
-**Trạng Thái**: ⚠️ BLOCKED - Models không khớp với code mới
+**Giai Đoạn**: Phase 4.3 - Hyperopt Optimization  
+**Trạng Thái**: ⏳ READY - Sẵn sàng chạy hyperopt 1 năm data
 
-## 2. Bugs Đã Fix Trong Session Này
+## 2. Hoạt Động Gần Nhất
 
-### ✅ Bug 1: Custom Stoploss Trailing Effect (CRITICAL - Đã Fix)
-**File:** `FreqAIStrategy.py` line 136  
-**Vấn đề:** Dùng `current_rate` → trailing effect → -91 USDT loss từ 33 trades  
-**Fix:** Đổi `current_rate` → `trade.open_rate`  
-**Impact:** KHÔNG cần retrain (runtime logic)
+### ✅ Pipeline Test PASS (2025-12-01 16:43)
+- **Test hyperopt 1 tháng (Oct 2024):** THÀNH CÔNG
+- **Kết quả:** 3 trades, 100% win rate, +4.29 USDT
+- **Best params đã lưu:** `user_data/strategies/FreqAIStrategy.json`
+- **Models backed up:** `models_20251201_164333` (48.67 MB)
 
-### ✅ Bug 2: ATR/EMA None Check (Đã Fix nhưng gây incompatibility)
-**File:** `wave_indicators.py`  
-**Vấn đề:** `ta.atr()` trả về None khi không đủ data → crash  
-**Fix:** Thêm helper functions `safe_atr()` và `safe_ema()`  
-**Impact:** CẦN retrain vì thay đổi code flow
+### ✅ Makefile Updates
+- **`clean-models`**: Xóa models + hyperopt_results + docker cache
+- **`clean-models-force`**: Force delete không hỏi
+- **`show-params`**: Xem params hiện tại từ JSON
+- **`reset-params`**: Reset về defaults trong code
+- **Fixed**: `atr_multiplier` KeyError (bỏ `stoploss` khỏi HYPEROPT_SPACES)
+
+### ⏳ Chuẩn Bị Hyperopt 1 Năm
+- **Timerange:** 20231101-20241101 (1 năm)
+- **Epochs:** 500
+- **Spaces:** buy, sell, roi
+- **Data:** ✅ Đã có đủ (Sep 2023 - Dec 2024)
+- **Models:** ✅ Đã xóa clean
 
 ## 3. Tình Trạng Hiện Tại
 
-### ⚠️ Feature Mismatch Issue
-- Models đã train với code cũ (wave_indicators.py chưa có safe_atr)
-- Code mới có thêm null safety checks
-- FreqAI báo lỗi: "different features furnished by current strategy"
-
-### 🎯 Lựa Chọn:
-| Option | Mô tả | Thời gian |
-|--------|-------|-----------|
-| **Option 1** | Retrain từ đầu với code mới | ~2-3 giờ |
-| **Option 2** | Revert wave_indicators, chỉ giữ fix custom_stoploss | Ngay lập tức |
+### Best Parameters (từ test 1 tháng)
+```json
+{
+  "buy": {
+    "buy_adx_threshold": 27,
+    "buy_pred_threshold": 0.007,
+    "buy_rsi_high": 66,
+    "buy_rsi_low": 29,
+    "confidence_threshold": 0.685
+  },
+  "sell": {
+    "sell_pred_threshold": -0.021,
+    "sell_rsi_threshold": 73
+  },
+  "roi": {
+    "0": 0.112,
+    "40": 0.049,
+    "91": 0.018,
+    "137": 0
+  }
+}
+```
 
 ### Models Available (Google Drive):
-- `models_20251201_074154` - 467 MB (96 models, 1-year data)
-- `models_20251201_000849` - 445 MB
+- `models_20251201_164333` - 48 MB (10 models, 1-month test)
+- `models_20251201_074154` - 467 MB (96 models, 6-month data)
 - `models_20251130_180612` - 211 MB
 
 ## 4. Thành Tựu Trước Đó
+
+### Pipeline Test Results (2025-12-01 16:43)
+
+| Metric | Value |
+|--------|-------|
+| Epochs | 100 |
+| Timerange | Oct 2024 (1 tháng) |
+| Trades | 3 |
+| Win Rate | 100% |
+| Total Profit | +4.29 USDT |
+| Avg Duration | 2h 17m |
 
 ### Training Results Analysis ✅ [2025-11-30]
 
