@@ -23,10 +23,17 @@ import logging
 
 # Import VSA Indicators module (từ báo cáo nghiên cứu SMC/Wyckoff/VSA)
 try:
-    from user_data.strategies.indicators.vsa_indicators import VSAIndicators
+    from indicators.vsa_indicators import VSAIndicators
     VSA_AVAILABLE = True
 except ImportError:
-    VSA_AVAILABLE = False
+    try:
+        # Fallback: relative import
+        from .vsa_indicators import VSAIndicators
+        VSA_AVAILABLE = True
+    except ImportError:
+        VSA_AVAILABLE = False
+        import logging
+        logging.getLogger(__name__).warning("VSA Indicators not available - skipping")
 
 logger = logging.getLogger(__name__)
 
