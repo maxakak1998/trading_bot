@@ -8,12 +8,11 @@
 STRATEGY := FreqAIStrategy
 FREQAI_MODEL := XGBoostRegressor
 
-# Timeranges
-TRAIN_TIMERANGE := 20231101-20241101
-BACKTEST_TIMERANGE := 20241101-20241201
+TRAIN_TIMERANGE := 20240101-20250101
+BACKTEST_TIMERANGE := 20240101-20250101
 
 # Hyperopt settings
-HYPEROPT_EPOCHS := 500
+HYPEROPT_EPOCHS := 700
 HYPEROPT_LOSS := SortinoHyperOptLossDaily
 HYPEROPT_SPACES := buy sell roi
 RANDOM_STATE := 42
@@ -24,6 +23,12 @@ GCP_PROJECT := $(shell gcloud config get-value project 2>/dev/null)
 
 # Docker
 DOCKER_COMPOSE := docker compose
+
+# Trading pairs and mode for data download
+PAIRS := BTC/USDT:USDT ETH/USDT:USDT
+TRADING_MODE := futures
+TIME_FRAMES := 5m 15m 1h 4h
+TIME_RANGE := 20230801-20251201
 
 .PHONY: help start stop restart logs update trade-dry create-userdir list-strategies train backtest hyperopt backup
 
@@ -105,6 +110,9 @@ dry-run: ## Paper trading
 		--strategy $(STRATEGY) \
 		--freqaimodel $(FREQAI_MODEL) \
 		--dry-run
+down-timerange-data: 
+	$(DOCKER_COMPOSE) run --rm freqtrade download-data --trading-mode $(TRADING_MODE) --pairs $(PAIRS) --timeframes $(TIME_FRAMES) --timerange $(TIME_RANGE)
+	
 
 live: ## Live trading (REAL MONEY - cẩn thận!)
 	@echo "⚠️  WARNING: This will trade with REAL MONEY!"
@@ -126,7 +134,9 @@ hyperopt: ## Hyperopt optimization với TRAIN_TIMERANGE
 		--epochs $(HYPEROPT_EPOCHS) \
 		--spaces $(HYPEROPT_SPACES) \
 		--timerange $(TRAIN_TIMERANGE) \
-		--random-state $(RANDOM_STATE)
+		--random-state $(RANDOM_STATE) \
+		--j 1
+		--verbose
 	@echo "✅ Hyperopt complete! Use 'make hyperopt-show' to see best results"
 	@echo "💾 Backing up new models..."
 	./scripts/backup_to_drive.sh models
@@ -136,6 +146,24 @@ hyperopt-show: ## Show best hyperopt results
 
 hyperopt-list: ## List top 10 hyperopt results
 	$(DOCKER_COMPOSE) run --rm freqtrade hyperopt-list --best 10 --no-details
+
+
+docker-stats: ## Monitor Docker container memory/CPU usage
+	@echo "📊 Docker container stats (Ctrl+C to exit):"
+	docker stats freqtrade --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}"
+
+docker-inspect-oom: ## Check if container was killed by OOM
+	@echo "🔍 Checking container exit status..."
+	@docker inspect freqtrade --format='{{.State.ExitCode}}' 2>/dev/null && \
+		docker inspect freqtrade --format='Exit Code: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}' || \
+		echo "Container not found. It may have been removed."
+	@echo ""
+	@echo "Exit codes:"
+	@echo "  137 = SIGKILL (usually OOM)"
+	@echo "  139 = SIGSEGV (segfault)"
+	@echo "  143 = SIGTERM (graceful stop)"
+	@echo ""
+	@echo "💡 Check dmesg for OOM killer logs: dmesg | grep -i 'killed process'"
 
 show-params: ## Show current strategy parameters from JSON
 	@echo "📊 Current Strategy Parameters:"
@@ -162,23 +190,10 @@ backup-models: ## Backup models to Google Drive (versioned)
 	@echo "✅ Models backed up!"
 
 clean-models: ## Delete models + docker cache (with optional backup)
-	@echo "⚠️  WARNING: This will delete all trained models and docker cache!"
-	@read -p "Backup before delete? (yes/no): " backup && \
-		if [ "$$backup" = "yes" ]; then \
-			./scripts/backup_to_drive.sh models && echo "✅ Models backed up!"; \
-		fi
-	@read -p "Delete all models + cache? (yes/no): " confirm && [ "$$confirm" = "yes" ] || exit 1
 	rm -rf user_data/models/freqai-*
 	rm -rf user_data/hyperopt_results/*
 	docker system prune -f --volumes 2>/dev/null || true
 	@echo "🗑️ Models and cache deleted."
-
-clean-models-force: ## Force delete models + docker cache (NO backup, NO confirm)
-	@echo "🗑️ Force deleting all models and docker cache..."
-	rm -rf user_data/models/freqai-*
-	rm -rf user_data/hyperopt_results/*
-	docker system prune -f --volumes 2>/dev/null || true
-	@echo "✅ Models and cache deleted."
 
 # ===========================================
 # Model Testing (Local)
@@ -241,3 +256,49 @@ gcp-ssh: ## SSH into freqtrade-live VM
 
 gcp-logs: ## View logs from freqtrade-live VM
 	gcloud compute ssh freqtrade-live --zone=$(GCP_ZONE) --project=$(GCP_PROJECT) --command="cd /opt/freqtrade && docker compose logs -f --tail=100"
+
+# ===========================================
+# Debugging & Monitoring
+# ===========================================
+
+check-memory: ## Check available system memory
+	@echo "💾 System Memory Status:"
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "  Total RAM: $$(sysctl -n hw.memsize | awk '{print $$1/1024/1024/1024 " GB"}')"; \
+		vm_stat | head -10; \
+	else \
+		free -h; \
+	fi
+	@echo ""
+	@echo "🐳 Docker Memory Settings:"
+	@docker system info 2>/dev/null | grep -E "Total Memory|CPUs" || echo "  Docker not running"
+
+check-oom: ## Check system logs for OOM killer events
+	@echo "🔍 Checking for OOM killer events..."
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		echo "  macOS: Check Activity Monitor > Memory tab"; \
+		log show --predicate 'eventMessage contains "killed"' --last 1h 2>/dev/null | head -20 || echo "  No recent OOM events"; \
+	else \
+		dmesg | grep -i "killed process" | tail -10 || echo "  No recent OOM events"; \
+	fi
+
+diagnose-137: ## Full diagnosis for Error 137 (OOM)
+	@echo "=============================================="
+	@echo "🔍 ERROR 137 DIAGNOSIS (OOM Kill)"
+	@echo "=============================================="
+	@echo ""
+	@echo "1️⃣  System Memory:"
+	@make check-memory 2>/dev/null || true
+	@echo ""
+	@echo "2️⃣  Docker Container Status:"
+	@docker inspect freqtrade --format='OOMKilled: {{.State.OOMKilled}}, ExitCode: {{.State.ExitCode}}' 2>/dev/null || echo "  Container not found"
+	@echo ""
+	@echo "3️⃣  Docker Memory Limit:"
+	@docker inspect freqtrade --format='Memory Limit: {{.HostConfig.Memory}}' 2>/dev/null || echo "  Container not found"
+	@echo ""
+	@echo "💡 SOLUTIONS:"
+	@echo "  a) Reduce parallel jobs: make hyperopt-debug (uses -j 1)"
+	@echo "  b) Use shorter timerange: make hyperopt-lowmem"
+	@echo "  c) Increase memory in docker-compose.yml"
+	@echo "  d) Close other applications to free RAM"
+	@echo "  e) Use GCP VM: make gcp-hyperopt"

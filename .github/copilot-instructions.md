@@ -66,6 +66,32 @@ When user says **"Update Memory Bank"** or **"UMB"**:
 **Creating files:**
 - Do not create uncecessary files or sumamry files if not requested
 
+**🚨 VERIFY BEFORE ANSWERING (MANDATORY)**
+
+You **MUST** verify technical information before answering:
+
+1. **For FreqAI/FreqTrade questions:**
+   - ALWAYS fetch official docs first: `https://www.freqtrade.io/en/stable/`
+   - DO NOT guess about mechanics like `train_period_days`, rolling windows, etc.
+   - If unsure, say "Let me check the official documentation first"
+
+2. **For ANY technical claim:**
+   - If you're not 100% certain, verify with official sources
+   - Cross-reference with documentation before making diagrams
+   - Cite the source URL when explaining technical concepts
+
+3. **When you make a mistake:**
+   - Acknowledge it immediately
+   - Correct the information with proper sources
+   - Learn from it - don't repeat the same pattern
+
+4. **Never:**
+   - Give confident-sounding wrong answers
+   - Create diagrams without verifying the underlying logic
+   - Assume you know how a system works without checking docs
+
+**Why this matters:** On [2024-12-XX], I gave incorrect information about FreqAI's rolling window mechanism, confidently stating that data was "wasted" when it actually uses a sliding window approach. This was verified to be wrong by Gemini and official FreqTrade docs. This rule prevents such mistakes.
+
 **Interactive Feedback (MANDATORY)**
 
 You **MUST ALWAYS** call `MCP interactive_feedback` in the following scenarios:

@@ -497,6 +497,7 @@ class ChartPatterns:
         - %-rising_wedge, %-falling_wedge
         - %-ascending_triangle, %-descending_triangle, %-symmetrical_triangle
         - %-bull_flag, %-bear_flag
+        - %-pattern_bull_score, %-pattern_bear_score, %-pattern_net_score
         
         Args:
             dataframe: OHLCV DataFrame
@@ -517,11 +518,83 @@ class ChartPatterns:
         dataframe = ChartPatterns.detect_triangle(dataframe)
         dataframe = ChartPatterns.detect_flag(dataframe)
         
+        # Step 3: Summarize patterns into scores
+        dataframe = ChartPatterns.summarize_patterns(dataframe)
+        
         pattern_cols = [col for col in dataframe.columns if any(
-            p in col for p in ['double', 'head', 'wedge', 'triangle', 'flag']
+            p in col for p in ['double', 'head', 'wedge', 'triangle', 'flag', 'pattern_']
         ) and col.startswith('%-')]
         
         logger.info(f"Added {len(pattern_cols)} chart pattern features")
+        
+        return dataframe
+    
+    # ============================================================
+    # PATTERN SUMMARIZATION - Meta-features
+    # ============================================================
+    
+    @staticmethod
+    def summarize_patterns(dataframe: DataFrame) -> DataFrame:
+        """
+        Tổng hợp các patterns thành điểm số tổng.
+        
+        Thay vì ném 13 cột 0/1 vào AI (làm nhiễu), 
+        gộp lại thành 3 điểm số:
+        - %-pattern_bull_score: Tổng patterns bullish (0-5)
+        - %-pattern_bear_score: Tổng patterns bearish (0-5)
+        - %-pattern_net_score: Bull - Bear score (-5 to +5)
+        
+        Weights:
+        - Double Top/Bottom: 1.0 (reliable reversal)
+        - Head & Shoulders: 1.5 (strong reversal)
+        - Wedge: 0.8 (moderate)
+        - Triangle: 0.7 (continuation)
+        - Flag: 0.6 (short-term)
+        """
+        # Bullish patterns with weights
+        bullish_patterns = {
+            '%-double_bottom': 1.0,
+            '%-head_shoulders_inv': 1.5,
+            '%-falling_wedge': 0.8,
+            '%-ascending_triangle': 0.7,
+            '%-bull_flag': 0.6,
+        }
+        
+        # Bearish patterns with weights
+        bearish_patterns = {
+            '%-double_top': 1.0,
+            '%-head_shoulders': 1.5,
+            '%-rising_wedge': 0.8,
+            '%-descending_triangle': 0.7,
+            '%-bear_flag': 0.6,
+        }
+        
+        # Calculate bull score
+        bull_score = pd.Series(0.0, index=dataframe.index)
+        for col, weight in bullish_patterns.items():
+            if col in dataframe.columns:
+                # Use min() to avoid overstating when pattern confidence > 1
+                bull_score += dataframe[col].clip(0, 1) * weight
+        
+        # Calculate bear score
+        bear_score = pd.Series(0.0, index=dataframe.index)
+        for col, weight in bearish_patterns.items():
+            if col in dataframe.columns:
+                bear_score += dataframe[col].clip(0, 1) * weight
+        
+        # Normalize scores (max possible = sum of weights ≈ 4.6)
+        max_score = sum(bullish_patterns.values())
+        dataframe['%-pattern_bull_score'] = bull_score / max_score  # 0 to 1
+        dataframe['%-pattern_bear_score'] = bear_score / max_score  # 0 to 1
+        
+        # Net score: -1 (very bearish) to +1 (very bullish)
+        dataframe['%-pattern_net_score'] = dataframe['%-pattern_bull_score'] - dataframe['%-pattern_bear_score']
+        
+        # Pattern strength (any strong pattern detected?)
+        dataframe['%-pattern_strength'] = dataframe[['%-pattern_bull_score', '%-pattern_bear_score']].max(axis=1)
+        
+        # Has active pattern?
+        dataframe['%-has_pattern'] = (dataframe['%-pattern_strength'] > 0.1).astype(float)
         
         return dataframe
 

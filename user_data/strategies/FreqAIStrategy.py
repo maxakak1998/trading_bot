@@ -206,7 +206,7 @@ class FreqAIStrategy(IStrategy):
     ignore_roi_if_entry_signal = False
 
     # FreqAI attributes
-    can_short = False
+    can_short = True
 
     def detect_market_regime(self, dataframe: DataFrame) -> DataFrame:
         """
@@ -269,30 +269,26 @@ class FreqAIStrategy(IStrategy):
         *Only functional with FreqAI enabled strategies*
         
         expand_all: Features ở đây KHÔNG được tự động nhân bản cho các timeframes khác.
-        Chỉ dùng cho các features đặc thù của 1 timeframe hoặc khó scale.
+        Chỉ dùng cho các features cục bộ của base timeframe (5m).
         
-        Đặt ở đây:
-        - Chart Patterns (khó scale đa khung)
-        - SMC Indicators (đặc thù SMC)
-        - Data Enhancement (API-based, không cần đa khung)
-        - Market Regime Detection (tổng hợp cuối cùng)
+        ĐẶT Ở ĐÂY (Chỉ 5m):
+        - Chart Patterns (Double Top/Bottom, H&S, Wedge, Triangle, Flag)
+          → Mô hình nến mang tính chất cục bộ, nhân bản 4 TF tạo dữ liệu rác
+        - Data Enhancement (Fear & Greed, API-based)
+          → Dữ liệu từ API, không cần đa khung
+        - Legacy indicators for Market Regime
+        
+        KHÔNG ĐẶT Ở ĐÂY (Đã move sang expand_basic):
+        - SMC Indicators → Order Block 4h có giá trị gấp 10 lần 5m
+        - Wave Indicators → Fibonacci levels cần nhìn từ HTF
         """
         
-        # ==== Chart Pattern Recognition ====
+        # ==== Chart Pattern Recognition (5m only) ====
         # Nhận dạng các mô hình giá: Double Top/Bottom, Head & Shoulders, Wedge, Triangle, Flag
-        # Khó scale đa khung vì logic phức tạp
+        # Mang tính chất cục bộ - không cần expand cho multi-TF
         dataframe = ChartPatterns.add_all_patterns(dataframe)
         
-        # ==== Wave Indicators (Elliott Wave Lite) ====
-        # Fibonacci Retracement/Extensions, Awesome Oscillator, Wave Structure
-        # Objective features based on EW principles (no subjective wave counting)
-        dataframe = WaveIndicators.add_all_features(dataframe)
-        
-        # ==== SMC Indicators ====
-        # Sonic R, EMA 369/630, Moon Phases - đặc thù SMC strategy
-        dataframe = SMCIndicators.add_all_indicators(dataframe)
-        
-        # ==== Data Enhancement (Phase 2) ====
+        # ==== Data Enhancement (5m only) ====
         # Fear & Greed Index, Volume Imbalance, Funding Proxy
         # API-based features, không cần đa khung
         dataframe = DataEnhancement.add_all_features(dataframe, period=period)
@@ -324,20 +320,39 @@ class FreqAIStrategy(IStrategy):
         expand_basic: Features ở đây SẼ ĐƯỢC TỰ ĐỘNG NHÂN BẢN cho các timeframes khác!
         FreqAI sẽ tạo ra: %-log_return_1_5m, %-log_return_1_1h, %-log_return_1_4h, v.v.
         
-        ĐÂY LÀ NƠI ĐẶT CORE FEATURES:
-        - Log Returns (quan trọng nhất)
-        - EMA Distance & Slopes
-        - Momentum Oscillators (RSI, Williams %R, CCI)
-        - Volume Features (OBV, CMF, MFI, VWAP)
-        - Volatility (ATR%, BB Width)
-        - Candle Patterns
-        - Support/Resistance
+        ĐÂY LÀ NƠI ĐẶT CORE FEATURES + SMC/WAVE:
         
-        Kết quả: Bot sẽ học từ 5m + 1h + 4h (Multi-timeframe Analysis)
+        1. Core Features (Log Returns, EMA, Momentum, Volume, Volatility)
+           → Nền tảng cho mọi phân tích, cần nhìn ở tất cả TF
+           
+        2. SMC Indicators (Order Blocks, FVG, Structure, Liquidity)
+           → Order Block ở 4H có giá trị GẤP 10 LẦN ở 5m
+           → Structure ở HTF quyết định trend chính
+           
+        3. Wave Indicators (Fibonacci Retracement/Extension, Awesome Oscillator)
+           → Fibo levels từ swing 4H là key levels cho toàn bộ price action
+           → AO divergence ở 1H xác nhận reversal mạnh hơn
+        
+        Kết quả: Bot sẽ học từ 5m + 15m + 1h + 4h (True Multi-timeframe SMC Analysis)
+        
+        Ví dụ AI sẽ học:
+        "Nếu giá chạm vùng Fibo 0.618 của khung 4H (từ expand_basic)
+        VÀ xuất hiện mẫu nến đảo chiều ở khung 5m (từ expand_all)
+        → Vào lệnh Mua"
         """
         # ==== CORE FEATURE ENGINEERING ====
-        # Tất cả features sẽ được expand cho 5m, 1h, 4h
+        # Tất cả features sẽ được expand cho 5m, 15m, 1h, 4h
         dataframe = FeatureEngineering.add_all_features(dataframe)
+        
+        # ==== SMC INDICATORS (Multi-TF) ====
+        # Order Blocks, FVG, Structure Direction, Liquidity Zones
+        # Order Block ở 4H có giá trị gấp 10 lần ở 5m
+        dataframe = SMCIndicators.add_all_indicators(dataframe)
+        
+        # ==== WAVE INDICATORS (Multi-TF) ====
+        # Fibonacci Retracement/Extension, Awesome Oscillator, Wave Structure
+        # Fibo levels từ swing 4H là key levels cho toàn bộ price action
+        dataframe = WaveIndicators.add_all_features(dataframe)
         
         return dataframe
 
@@ -370,116 +385,282 @@ class FreqAIStrategy(IStrategy):
         """
         Based on TA indicators, populates the entry signal for the given dataframe
         
-        Entry conditions (using Regression model + Hyperopt parameters):
-        1. Market Regime = TREND (strong directional movement)
-        2. AI Prediction > buy_pred_threshold (hyperopt tunable)
-        3. ADX > buy_adx_threshold (hyperopt tunable)
-        4. RSI in range [buy_rsi_low, buy_rsi_high] (hyperopt tunable)
-        5. Volume > 0 (market is active)
-        6. [Phase 2] Not in Extreme Greed (avoid FOMO entries)
-        7. [Phase 2] Volume Imbalance > 0 (more buyers than sellers)
-        8. [Phase 2] Market not overheated (price premium z-score < 2)
+        UPGRADED Entry conditions with Confluence system:
+        
+        LONG CONDITIONS:
+        1. AI Prediction > threshold (FreqAI output)
+        2. Market Regime = TREND (KER > 0.5 hoặc ADX > 25)
+        3. Trend Confluence > 0.5 (EMA alignment + ADX strong)
+        4. Momentum Confluence > 0.4 (RSI + MFI + CMF agree)
+        5. Money Pressure > 0 (buying pressure)
+        6. Pattern Net Score >= 0 (no bearish patterns)
+        7. Not in Extreme Greed (avoid FOMO)
+        8. Structure Direction > 0 (Higher Highs)
+        
+        SHORT CONDITIONS:
+        1. AI Prediction < -threshold 
+        2. Market Regime = TREND
+        3. Trend Confluence < 0.5 (bearish alignment)
+        4. Momentum Confluence < 0.6 (bearish momentum)
+        5. Money Pressure < 0 (selling pressure)
+        6. Pattern Net Score <= 0 (no bullish patterns)
+        7. RSI > 75 (overbought)
+        8. Structure Direction < 0 (Lower Lows)
         """
-        # Debug: Print columns to see what FreqAI added
+        # Debug logging
         logger.info(f"Columns available: {len(dataframe.columns)} columns")
-        logger.info(f"Sample columns: {dataframe.columns[:20].tolist()}")
         
         if self.config['freqai']['enabled']:
-            # Regression target column (predicts % price change)
             prediction_col = '&-price_change_pct'
-            logger.info(f"Looking for prediction column: {prediction_col}")
-            logger.info(f"Prediction column exists: {prediction_col in dataframe.columns}")
             
             if prediction_col in dataframe.columns:
                 logger.info(f"Prediction values sample: {dataframe[prediction_col].head()}")
                 
-                # Base conditions with HYPEROPT parameters
-                base_conditions = (
-                    (dataframe['market_regime'] == 'TREND') &  # Only trade in TREND
-                    (dataframe[prediction_col] > self.buy_pred_threshold.value) &  # HYPEROPT: prediction threshold
-                    (dataframe['volume'] > 0)
-                )
+                # =====================================================
+                # LONG ENTRY CONDITIONS (Upgraded with Confluence)
+                # =====================================================
                 
-                # ADX condition (HYPEROPT tunable)
-                adx_condition = True
-                if 'adx' in dataframe.columns:
-                    adx_condition = dataframe['adx'] > self.buy_adx_threshold.value
+                # Base: AI prediction positive
+                long_prediction = dataframe[prediction_col] > self.buy_pred_threshold.value
                 
-                # RSI condition (HYPEROPT tunable)
-                rsi_condition = True
-                if 'rsi' in dataframe.columns:
-                    rsi_condition = (
-                        (dataframe['rsi'] > self.buy_rsi_low.value) &
-                        (dataframe['rsi'] < self.buy_rsi_high.value)
-                    )
+                # Market regime: Use KER or ADX
+                long_regime = True
+                if '%-ker_10' in dataframe.columns:
+                    long_regime = dataframe['%-ker_10'] > 0.4  # Trending market
+                elif 'adx' in dataframe.columns:
+                    long_regime = dataframe['adx'] > self.buy_adx_threshold.value
                 
-                # Phase 2 enhancement conditions (optional, with safe defaults)
-                fg_condition = True  # Default to True if feature not available
+                # Trend confluence (new)
+                long_trend_confluence = True
+                if '%-trend_confluence' in dataframe.columns:
+                    long_trend_confluence = dataframe['%-trend_confluence'] > 0.5
+                
+                # Momentum confluence (new)
+                long_momentum = True
+                if '%-momentum_confluence' in dataframe.columns:
+                    long_momentum = dataframe['%-momentum_confluence'] > 0.4
+                
+                # Money pressure (new)
+                long_pressure = True
+                if '%-money_pressure' in dataframe.columns:
+                    long_pressure = dataframe['%-money_pressure'] > 0
+                
+                # Pattern check (new) - no bearish patterns
+                long_pattern = True
+                if '%-pattern_net_score' in dataframe.columns:
+                    long_pattern = dataframe['%-pattern_net_score'] >= 0
+                
+                # SMC Structure (new) - Higher Highs
+                long_structure = True
+                if '%-structure_direction' in dataframe.columns:
+                    long_structure = dataframe['%-structure_direction'] > -0.2
+                
+                # Phase 2: Fear/Greed
+                long_fg = True
                 if '%-is_extreme_greed' in dataframe.columns:
-                    fg_condition = dataframe['%-is_extreme_greed'] == 0  # Not extreme greed
+                    long_fg = dataframe['%-is_extreme_greed'] == 0
                 
-                vi_condition = True  # Default to True
-                if '%-volume_imbalance' in dataframe.columns:
-                    vi_condition = dataframe['%-volume_imbalance'] > 0  # More buyers
+                # Volume active
+                long_volume = dataframe['volume'] > 0
                 
-                overheat_condition = True  # Default to True
-                if '%-is_overheated' in dataframe.columns:
-                    overheat_condition = dataframe['%-is_overheated'] == 0  # Not overheated
-                
-                # Combine all conditions
+                # Combine LONG conditions
                 dataframe.loc[
-                    base_conditions & adx_condition & rsi_condition & 
-                    fg_condition & vi_condition & overheat_condition,
+                    long_prediction & long_regime & long_trend_confluence & 
+                    long_momentum & long_pressure & long_pattern & 
+                    long_structure & long_fg & long_volume,
                     'enter_long'] = 1
+                
+                # =====================================================
+                # SHORT ENTRY CONDITIONS (Upgraded with Confluence)
+                # =====================================================
+                
+                # Base: AI prediction negative
+                short_prediction = dataframe[prediction_col] < -self.buy_pred_threshold.value
+                
+                # Market regime: Trending
+                short_regime = True
+                if '%-ker_10' in dataframe.columns:
+                    short_regime = dataframe['%-ker_10'] > 0.4
+                elif 'adx' in dataframe.columns:
+                    short_regime = dataframe['adx'] > self.buy_adx_threshold.value
+                
+                # Trend confluence (bearish)
+                short_trend = True
+                if '%-trend_confluence' in dataframe.columns:
+                    short_trend = dataframe['%-trend_confluence'] < 0.5
+                
+                # Momentum confluence (bearish)
+                short_momentum = True
+                if '%-momentum_confluence' in dataframe.columns:
+                    short_momentum = dataframe['%-momentum_confluence'] < 0.6
+                
+                # Money pressure (selling)
+                short_pressure = True
+                if '%-money_pressure' in dataframe.columns:
+                    short_pressure = dataframe['%-money_pressure'] < 0
+                
+                # Pattern check - no bullish patterns
+                short_pattern = True
+                if '%-pattern_net_score' in dataframe.columns:
+                    short_pattern = dataframe['%-pattern_net_score'] <= 0
+                
+                # SMC Structure - Lower Lows
+                short_structure = True
+                if '%-structure_direction' in dataframe.columns:
+                    short_structure = dataframe['%-structure_direction'] < 0.2
+                
+                # RSI overbought
+                short_rsi = True
+                if 'rsi' in dataframe.columns:
+                    short_rsi = dataframe['rsi'] > self.sell_rsi_threshold.value
+                
+                # Volume active
+                short_volume = dataframe['volume'] > 0
+                
+                # Combine SHORT conditions
+                dataframe.loc[
+                    short_prediction & short_regime & short_trend &
+                    short_momentum & short_pressure & short_pattern &
+                    short_structure & short_rsi & short_volume,
+                    'enter_short'] = 1
+                    
             else:
                 logger.warning(f"Prediction column {prediction_col} NOT FOUND - FreqAI not training!")
-                pass
-                # print(f"Warning: {prediction_col} not found in dataframe.")
 
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        Based on TA indicators, populates the exit signal for the given dataframe
+        Exit signal using 5-Layer Confluence System:
         
-        Exit conditions (using Regression model + Hyperopt parameters):
-        1. AI Prediction < sell_pred_threshold (hyperopt tunable)
-        2. RSI > sell_rsi_threshold (overbought, hyperopt tunable)
-        3. Volume > 0 (market is active)
-        4. [Phase 2] Extreme Fear detected (panic selling in market) - early exit
-        5. [Phase 2] Market oversold (may bounce, but safer to exit)
+        LONG EXIT when ANY of these conditions:
+        1. AI Prediction < sell_pred_threshold (bearish forecast)
+        2. Trend confluence < 0.5 (trend weakening)
+        3. Momentum confluence < 0.4 (momentum fading)
+        4. Pattern net score becomes negative (bearish patterns forming)
+        5. RSI overbought (> sell_rsi_threshold)
+        6. SMC: Price at Order Block resistance / FVG filled
+        7. Extreme Fear (panic in market)
+        
+        SHORT EXIT when ANY of these conditions:
+        1. AI Prediction > buy_pred_threshold (bullish forecast)
+        2. Trend confluence > 0.5 (trend reversing up)
+        3. Momentum confluence > 0.6 (momentum turning bullish)
+        4. Pattern net score becomes positive (bullish patterns forming)
+        5. RSI oversold (< buy_rsi_low)
+        6. SMC: Price at Order Block support / Bullish FVG
         """
         if self.config['freqai']['enabled']:
             # Regression target column (predicts % price change)
             prediction_col = '&-price_change_pct'
             if prediction_col in dataframe.columns:
-                # Base exit condition with HYPEROPT parameters
-                base_exit = (
-                    (dataframe[prediction_col] < self.sell_pred_threshold.value) &  # HYPEROPT: sell threshold
+                
+                # =====================================================
+                # LONG EXIT CONDITIONS
+                # =====================================================
+                
+                # AI prediction bearish
+                exit_prediction = (
+                    (dataframe[prediction_col] < self.sell_pred_threshold.value) &
                     (dataframe['volume'] > 0)
                 )
                 
-                # RSI overbought exit (HYPEROPT tunable)
-                rsi_exit = False
+                # Trend confluence weakening
+                exit_trend = False
+                if '%-trend_confluence' in dataframe.columns:
+                    exit_trend = dataframe['%-trend_confluence'] < 0.4
+                
+                # Momentum fading
+                exit_momentum = False
+                if '%-momentum_confluence' in dataframe.columns:
+                    exit_momentum = dataframe['%-momentum_confluence'] < 0.3
+                
+                # Money pressure turning negative (selling)
+                exit_pressure = False
+                if '%-money_pressure' in dataframe.columns:
+                    exit_pressure = dataframe['%-money_pressure'] < -0.3
+                
+                # Bearish pattern forming
+                exit_pattern = False
+                if '%-pattern_net_score' in dataframe.columns:
+                    exit_pattern = dataframe['%-pattern_net_score'] < -1
+                
+                # RSI overbought
+                exit_rsi = False
                 if 'rsi' in dataframe.columns:
-                    rsi_exit = dataframe['rsi'] > self.sell_rsi_threshold.value
+                    exit_rsi = dataframe['rsi'] > self.sell_rsi_threshold.value
                 
-                # Phase 2 enhancement: Early exit on extreme fear
-                extreme_fear_exit = False  # Default to False
+                # SMC: At resistance (Order Block bear) or Bearish FVG
+                exit_smc = False
+                if '%-fvg_bear' in dataframe.columns:
+                    exit_smc = dataframe['%-fvg_bear'] == 1
+                elif '%-order_block_bear' in dataframe.columns:
+                    exit_smc = dataframe['%-order_block_bear'] == 1
+                
+                # Extreme Fear (market panic - exit to safety)
+                exit_fear = False
                 if '%-is_extreme_fear' in dataframe.columns:
-                    extreme_fear_exit = dataframe['%-is_extreme_fear'] == 1
+                    exit_fear = dataframe['%-is_extreme_fear'] == 1
                 
-                # Phase 2 enhancement: Exit when market is oversold (potential bounce but risky)
-                oversold_exit = False  # Default to False
-                if '%-is_oversold' in dataframe.columns:
-                    oversold_exit = (
-                        (dataframe['%-is_oversold'] == 1) & 
-                        (dataframe[prediction_col] < self.confidence_threshold.value)  # HYPEROPT: confidence
-                    )
-                
-                # Combine exit conditions (any condition triggers exit)
+                # Combine LONG exit conditions (ANY triggers exit)
                 dataframe.loc[
-                    base_exit | rsi_exit | extreme_fear_exit | oversold_exit,
+                    exit_prediction | exit_trend | exit_momentum | 
+                    exit_pressure | exit_pattern | exit_rsi | 
+                    exit_smc | exit_fear,
                     'exit_long'] = 1
+                
+                # =====================================================
+                # SHORT EXIT CONDITIONS (mirror of Long exit)
+                # =====================================================
+                
+                # AI prediction bullish
+                short_exit_prediction = (
+                    (dataframe[prediction_col] > self.buy_pred_threshold.value) &
+                    (dataframe['volume'] > 0)
+                )
+                
+                # Trend confluence turning bullish
+                short_exit_trend = False
+                if '%-trend_confluence' in dataframe.columns:
+                    short_exit_trend = dataframe['%-trend_confluence'] > 0.6
+                
+                # Momentum turning bullish
+                short_exit_momentum = False
+                if '%-momentum_confluence' in dataframe.columns:
+                    short_exit_momentum = dataframe['%-momentum_confluence'] > 0.7
+                
+                # Money pressure positive (buying coming in)
+                short_exit_pressure = False
+                if '%-money_pressure' in dataframe.columns:
+                    short_exit_pressure = dataframe['%-money_pressure'] > 0.3
+                
+                # Bullish pattern forming
+                short_exit_pattern = False
+                if '%-pattern_net_score' in dataframe.columns:
+                    short_exit_pattern = dataframe['%-pattern_net_score'] > 1
+                
+                # RSI oversold (potential bounce)
+                short_exit_rsi = False
+                if 'rsi' in dataframe.columns:
+                    short_exit_rsi = dataframe['rsi'] < self.buy_rsi_low.value
+                
+                # SMC: At support (Order Block bull) or Bullish FVG
+                short_exit_smc = False
+                if '%-fvg_bull' in dataframe.columns:
+                    short_exit_smc = dataframe['%-fvg_bull'] == 1
+                elif '%-order_block_bull' in dataframe.columns:
+                    short_exit_smc = dataframe['%-order_block_bull'] == 1
+                
+                # Extreme Fear (market bottoming, shorts may get squeezed)
+                short_exit_fear = False
+                if '%-is_extreme_fear' in dataframe.columns:
+                    short_exit_fear = dataframe['%-is_extreme_fear'] == 1
+                
+                # Combine SHORT exit conditions (ANY triggers exit)
+                dataframe.loc[
+                    short_exit_prediction | short_exit_trend | short_exit_momentum |
+                    short_exit_pressure | short_exit_pattern | short_exit_rsi |
+                    short_exit_smc | short_exit_fear,
+                    'exit_short'] = 1
         
         return dataframe

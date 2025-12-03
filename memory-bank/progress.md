@@ -1,7 +1,7 @@
 # Theo Dõi Tiến Độ - Hệ Thống AI Trading
 
 ## Cập Nhật Lần Cuối
-[2025-12-01 17:00:00] - Pipeline test PASS, sẵn sàng hyperopt 1 năm
+[2025-12-02 11:45:00] - Implemented 5 Signal Layers Architecture with Confluence System
 
 ---
 
@@ -21,6 +21,43 @@
 ---
 
 ## Đang Thực Hiện 🔄
+
+### ✅ 5 Signal Layers Architecture (HOÀN THÀNH - 2025-12-02 11:45)
+
+**THIẾT KẾ:**
+5-Layer Confluence System:
+1. **Trend Confluence** (EMA Distance + ATR) → `%-trend_confluence`
+2. **Momentum Confluence** (RSI + MACD_hist) → `%-momentum_confluence`
+3. **Money Pressure** (OBV + CMF) → `%-money_pressure`
+4. **Pattern Net Score** (Bull - Bear patterns) → `%-pattern_net_score`
+5. **SMC Features** (FVG + Order Blocks) → `%-fvg_bull/bear`, `%-order_block_bull/bear`
+
+**FILES UPGRADED:**
+| File | Changes |
+|------|---------|
+| `smc_indicators.py` | Distance-based features, FVG detection |
+| `feature_engineering.py` | KER, Volatility Score, Confluence features |
+| `chart_patterns.py` | Added `summarize_patterns()` method |
+| `FreqAIStrategy.py` | New entry/exit logic with confluence |
+
+**ENTRY CONDITIONS (LONG):**
+- AI Prediction > buy_pred_threshold
+- trend_confluence > 0.5
+- momentum_confluence > 0.4
+- pattern_net_score > 0
+- money_pressure > 0
+- SMC: fvg_bull OR dist_to_order_block_bull < 0.01
+
+**EXIT CONDITIONS (LONG):**
+- AI Prediction < sell_pred_threshold OR
+- trend_confluence < 0.4 OR
+- momentum_confluence < 0.3 OR
+- money_pressure < -0.3 OR
+- pattern_net_score < -1 OR
+- fvg_bear == 1 OR
+- Extreme Fear
+
+**NEXT:** Run hyperopt to test new features
 
 ### ⏳ Hyperopt 1 Năm (SẴN SÀNG - 2025-12-01 17:00)
 

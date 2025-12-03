@@ -21,6 +21,13 @@ from pandas import DataFrame
 from typing import Optional
 import logging
 
+# Import VSA Indicators module (từ báo cáo nghiên cứu SMC/Wyckoff/VSA)
+try:
+    from user_data.strategies.indicators.vsa_indicators import VSAIndicators
+    VSA_AVAILABLE = True
+except ImportError:
+    VSA_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -351,6 +358,199 @@ class FeatureEngineering:
         return dataframe
     
     # ============================================================
+    # 8. MARKET REGIME FEATURES - KER, Volatility Regime
+    # ============================================================
+    
+    @staticmethod
+    def add_market_regime_features(dataframe: DataFrame) -> DataFrame:
+        """
+        Advanced Market Regime Detection.
+        
+        Kaufman Efficiency Ratio (KER):
+        - Gần 1: Trending cực mạnh (ít nhiễu, tín hiệu rõ)
+        - Gần 0: Sideway/Choppy (nhiều nhiễu, tránh trade)
+        
+        Volatility Regime:
+        - Phân loại độ biến động: Low/Normal/High
+        - Z-score của ATR so với historical
+        
+        Features:
+        - %-ker_10: Kaufman Efficiency Ratio (10 periods)
+        - %-ker_20: Kaufman Efficiency Ratio (20 periods)
+        - %-volatility_zscore: ATR z-score vs 100-period mean
+        - %-volatility_regime: -1=Low, 0=Normal, 1=High
+        - %-choppiness: Choppiness Index (0-100 normalized)
+        """
+        # === Kaufman Efficiency Ratio (KER) ===
+        # KER = |Change| / Total Volatility
+        # High KER = Trending, Low KER = Choppy
+        for period in [10, 20]:
+            change = dataframe['close'].diff(period).abs()
+            volatility = dataframe['close'].diff(1).abs().rolling(period).sum()
+            dataframe[f'%-ker_{period}'] = change / (volatility + 1e-10)
+            dataframe[f'%-ker_{period}'] = dataframe[f'%-ker_{period}'].clip(0, 1)
+        
+        # === Volatility Regime ===
+        # Z-score of current ATR vs rolling mean/std
+        if '%-atr_pct' not in dataframe.columns:
+            atr = pd.Series(ta.ATR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14), index=dataframe.index)
+            dataframe['%-atr_pct'] = atr / dataframe['close']
+        
+        atr_mean = dataframe['%-atr_pct'].rolling(100).mean()
+        atr_std = dataframe['%-atr_pct'].rolling(100).std()
+        dataframe['%-volatility_zscore'] = (dataframe['%-atr_pct'] - atr_mean) / (atr_std + 1e-10)
+        dataframe['%-volatility_zscore'] = dataframe['%-volatility_zscore'].clip(-3, 3)  # Clip extremes
+        
+        # Volatility regime classification
+        # -1: Low volatility, 0: Normal, 1: High volatility
+        dataframe['%-volatility_regime'] = np.select(
+            [
+                dataframe['%-volatility_zscore'] < -1,  # Low vol
+                dataframe['%-volatility_zscore'] > 1,   # High vol
+            ],
+            [-1, 1],
+            default=0  # Normal
+        )
+        
+        # === Choppiness Index ===
+        # High = Choppy/Sideway, Low = Trending
+        high_low_diff = dataframe['high'] - dataframe['low']
+        sum_high_low = high_low_diff.rolling(14).sum()
+        highest_high = dataframe['high'].rolling(14).max()
+        lowest_low = dataframe['low'].rolling(14).min()
+        true_range = highest_high - lowest_low
+        
+        choppiness = 100 * np.log10(sum_high_low / (true_range + 1e-10)) / np.log10(14)
+        dataframe['%-choppiness'] = (choppiness - 50) / 50  # Normalize to [-1, 1]
+        dataframe['%-choppiness'] = dataframe['%-choppiness'].clip(-1, 1)
+        
+        # === Range Expansion/Contraction ===
+        # Are we breaking out or consolidating?
+        price_range = dataframe['high'] - dataframe['low']
+        avg_range = price_range.rolling(20).mean()
+        dataframe['%-range_expansion'] = (price_range - avg_range) / (avg_range + 1e-10)
+        
+        return dataframe
+    
+    # ============================================================
+    # 9. CONFLUENCE FEATURES - Meta-indicators
+    # ============================================================
+    
+    @staticmethod
+    def add_confluence_features(dataframe: DataFrame) -> DataFrame:
+        """
+        Confluence (Meta-features) - Tổng hợp nhiều tín hiệu.
+        
+        Thay vì để AI tự mò mẫm trong biển indicators,
+        tạo các "Siêu chỉ báo" đại diện cho sự đồng thuận.
+        
+        Features:
+        - %-trend_confluence: Sự đồng thuận xu hướng (EMAs + ADX)
+        - %-momentum_confluence: Sự đồng thuận momentum (RSI + MFI + CMF)
+        - %-money_pressure: Áp lực dòng tiền (OBV + Volume Imbalance)
+        - %-overall_score: Điểm tổng hợp cho entry decision
+        """
+        # === TREND CONFLUENCE ===
+        # Nếu EMA ngắn > dài VÀ ADX mạnh VÀ KER cao → Trend rất mạnh
+        # Scale: 0 (no trend) to 1 (strong trend)
+        
+        trend_signals = []
+        
+        # EMA 10 > close?
+        if '%-dist_to_ema_10' in dataframe.columns:
+            trend_signals.append((dataframe['%-dist_to_ema_10'] > 0).astype(float))
+        
+        # EMA 20 > close?
+        if '%-dist_to_ema_20' in dataframe.columns:
+            trend_signals.append((dataframe['%-dist_to_ema_20'] > 0).astype(float))
+        
+        # EMA 50 > close?
+        if '%-dist_to_ema_50' in dataframe.columns:
+            trend_signals.append((dataframe['%-dist_to_ema_50'] > 0).astype(float))
+        
+        # ADX strong (> 0.25 = 25 in raw)?
+        if '%-adx' in dataframe.columns:
+            trend_signals.append((dataframe['%-adx'] > 0.25).astype(float))
+        
+        # KER trending (> 0.5)?
+        if '%-ker_10' in dataframe.columns:
+            trend_signals.append((dataframe['%-ker_10'] > 0.5).astype(float))
+        
+        if trend_signals:
+            dataframe['%-trend_confluence'] = sum(trend_signals) / len(trend_signals)
+        else:
+            dataframe['%-trend_confluence'] = 0.5
+        
+        # === MOMENTUM CONFLUENCE ===
+        # RSI tăng + MFI tăng + Volume tăng
+        # Scale: 0 (bearish) to 1 (bullish)
+        
+        momentum_signals = []
+        
+        # RSI > 50?
+        if '%-rsi_normalized' in dataframe.columns:
+            momentum_signals.append((dataframe['%-rsi_normalized'] > 0).astype(float))
+        
+        # MFI > 50?
+        if '%-mfi_normalized' in dataframe.columns:
+            momentum_signals.append((dataframe['%-mfi_normalized'] > 0).astype(float))
+        
+        # CMF > 0?
+        if '%-cmf' in dataframe.columns:
+            momentum_signals.append((dataframe['%-cmf'] > 0).astype(float))
+        
+        # OBV rising?
+        if '%-obv_slope' in dataframe.columns:
+            momentum_signals.append((dataframe['%-obv_slope'] > 0).astype(float))
+        
+        if momentum_signals:
+            dataframe['%-momentum_confluence'] = sum(momentum_signals) / len(momentum_signals)
+        else:
+            dataframe['%-momentum_confluence'] = 0.5
+        
+        # === MONEY PRESSURE ===
+        # Áp lực dòng tiền: Kết hợp OBV và Volume momentum
+        # Scale: -1 (selling pressure) to +1 (buying pressure)
+        
+        pressure_components = []
+        
+        if '%-obv_slope' in dataframe.columns:
+            # OBV slope normalized to [-1, 1]
+            obv_normalized = dataframe['%-obv_slope'].clip(-0.1, 0.1) * 10
+            pressure_components.append(obv_normalized)
+        
+        if '%-cmf' in dataframe.columns:
+            # CMF already in [-1, 1]
+            pressure_components.append(dataframe['%-cmf'])
+        
+        if '%-volume_trend' in dataframe.columns:
+            # Volume trend normalized
+            vol_normalized = dataframe['%-volume_trend'].clip(-0.5, 0.5) * 2
+            pressure_components.append(vol_normalized)
+        
+        if pressure_components:
+            dataframe['%-money_pressure'] = sum(pressure_components) / len(pressure_components)
+            dataframe['%-money_pressure'] = dataframe['%-money_pressure'].clip(-1, 1)
+        else:
+            dataframe['%-money_pressure'] = 0
+        
+        # === OVERALL ENTRY SCORE ===
+        # Combine trend + momentum + money pressure
+        # Scale: 0 (avoid) to 1 (strong entry)
+        
+        dataframe['%-overall_score'] = (
+            dataframe['%-trend_confluence'] * 0.4 +  # 40% weight on trend
+            dataframe['%-momentum_confluence'] * 0.35 +  # 35% weight on momentum
+            (dataframe['%-money_pressure'] + 1) / 2 * 0.25  # 25% weight on money pressure
+        )
+        
+        # === BEARISH SCORE (for shorts) ===
+        # Inverse of bullish signals
+        dataframe['%-bearish_score'] = 1 - dataframe['%-overall_score']
+        
+        return dataframe
+    
+    # ============================================================
     # MAIN METHOD - Add All Features
     # ============================================================
     
@@ -393,7 +593,18 @@ class FeatureEngineering:
         # 7. Support/Resistance
         dataframe = FeatureEngineering.add_sr_features(dataframe)
         
-        # 8. Handle NaN values from rolling indicators
+        # 8. Market Regime (KER, Volatility, Choppiness)
+        dataframe = FeatureEngineering.add_market_regime_features(dataframe)
+        
+        # 9. Confluence (Meta-features)
+        dataframe = FeatureEngineering.add_confluence_features(dataframe)
+        
+        # 10. VSA (Volume Spread Analysis) - từ báo cáo nghiên cứu
+        if VSA_AVAILABLE:
+            dataframe = VSAIndicators.add_all_indicators(dataframe)
+            logger.info("VSA Indicators added")
+        
+        # 11. Handle NaN values from rolling indicators
         # Rolling indicators like EMA(200), rolling(50) create NaN in first N rows
         # Strategy: Forward fill first, then fill remaining with 0
         feature_cols = [c for c in dataframe.columns if c.startswith('%-')]
