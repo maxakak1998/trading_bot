@@ -14,7 +14,7 @@ BACKTEST_TIMERANGE := 20240101-20240701
 # Hyperopt settings - Optimized for Win Rate
 HYPEROPT_EPOCHS ?= 100
 HYPEROPT_LOSS ?= WinRatioHyperOptLoss
-HYPEROPT_SPACES := buy sell roi
+HYPEROPT_SPACES := buy sell roi stoploss trailing
 RANDOM_STATE := 42
 JOBS ?= 2  # Local: 2, GCP: 28
 
@@ -331,7 +331,7 @@ gcp-flow-train: gcp-sync ## Auto: Sync -> Train -> Backup -> Stop VM
 	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
 		nohup bash -c ' \
 			echo \"[1/3] Training started...\" > flow.log; \
-			rm -rf user_data/models/*; \
+			sudo rm -rf user_data/models/*; \
 			sudo docker run --rm \
 				-v \$$(pwd)/user_data:/freqtrade/user_data \
 				-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
