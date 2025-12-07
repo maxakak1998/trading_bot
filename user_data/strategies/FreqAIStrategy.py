@@ -57,22 +57,23 @@ class FreqAIStrategy(IStrategy):
     # =====================================================
     
     # Minimal ROI designed for the strategy.
+    # OPTIMIZED: Higher targets for better R:R ratio
     minimal_roi = {
-        "60": 0.01,
-        "30": 0.03,
-        "0": 0.05
+        "120": 0.02,   # 2% after 2 hours
+        "60": 0.04,    # 4% after 1 hour  
+        "30": 0.05,    # 5% after 30 min
+        "0": 0.06      # 6% immediate target
     }
 
-    # Risk Management - FIXED STOPLOSS (no trailing)
-    # With 20% max risk: -5% stoploss means leverage = 20%/5% = 4x
-    stoploss = -0.05  # 5% stoploss
+    # Risk Management - Tighter stoploss + Trailing
+    # With 20% max risk: -3% stoploss means leverage = 20%/3% = ~6.6x
+    stoploss = -0.03  # 3% stoploss (tighter for higher win rate)
     
-    # CRITICAL: Trailing stop DISABLED to avoid early exits
-    # Previous backtests showed trailing_stop caused 54% of trades to lose
-    trailing_stop = False
-    trailing_stop_positive = 0  # Disabled
-    trailing_stop_positive_offset = 0  # Disabled
-    trailing_only_offset_is_reached = False
+    # ENABLED: Trailing stop to lock in profits
+    trailing_stop = True
+    trailing_stop_positive = 0.015  # Activate at 1.5% profit
+    trailing_stop_positive_offset = 0.025  # Trail 2.5% behind
+    trailing_only_offset_is_reached = True
     
     # Use ROI and exit signals instead of trailing
     use_exit_signal = True
@@ -206,6 +207,8 @@ class FreqAIStrategy(IStrategy):
     ignore_roi_if_entry_signal = False
 
     # FreqAI attributes
+    # TEMPORARILY DISABLED SHORT - Testing long-only in bull market
+    # Market +63.68%, shorts caused -4.73% loss
     can_short = True
 
     def detect_market_regime(self, dataframe: DataFrame) -> DataFrame:
@@ -286,12 +289,16 @@ class FreqAIStrategy(IStrategy):
         # ==== Chart Pattern Recognition (5m only) ====
         # Nhận dạng các mô hình giá: Double Top/Bottom, Head & Shoulders, Wedge, Triangle, Flag
         # Mang tính chất cục bộ - không cần expand cho multi-TF
-        dataframe = ChartPatterns.add_all_patterns(dataframe)
+        # Can be disabled via feature_flags.chart_patterns
+        if self.config.get('freqai', {}).get('feature_flags', {}).get('chart_patterns', True):
+            dataframe = ChartPatterns.add_all_patterns(dataframe)
         
         # ==== Data Enhancement (5m only) ====
         # Fear & Greed Index, Volume Imbalance, Funding Proxy
         # API-based features, không cần đa khung
-        dataframe = DataEnhancement.add_all_features(dataframe, period=period)
+        # Can be disabled via feature_flags.data_enhancement
+        if self.config.get('freqai', {}).get('feature_flags', {}).get('data_enhancement', True):
+            dataframe = DataEnhancement.add_all_features(dataframe, period=period)
 
         # ==== Legacy indicators (cho Market Regime) ====
         # Using talib (uppercase function names)
@@ -342,17 +349,22 @@ class FreqAIStrategy(IStrategy):
         """
         # ==== CORE FEATURE ENGINEERING ====
         # Tất cả features sẽ được expand cho 5m, 15m, 1h, 4h
-        dataframe = FeatureEngineering.add_all_features(dataframe)
+        # Pass config to enable feature_flags checks (e.g., vsa_indicators)
+        dataframe = FeatureEngineering.add_all_features(dataframe, config=self.config)
         
         # ==== SMC INDICATORS (Multi-TF) ====
         # Order Blocks, FVG, Structure Direction, Liquidity Zones
         # Order Block ở 4H có giá trị gấp 10 lần ở 5m
-        dataframe = SMCIndicators.add_all_indicators(dataframe)
+        # Can be disabled via feature_flags.smc_indicators
+        if self.config.get('freqai', {}).get('feature_flags', {}).get('smc_indicators', True):
+            dataframe = SMCIndicators.add_all_indicators(dataframe)
         
         # ==== WAVE INDICATORS (Multi-TF) ====
         # Fibonacci Retracement/Extension, Awesome Oscillator, Wave Structure
         # Fibo levels từ swing 4H là key levels cho toàn bộ price action
-        dataframe = WaveIndicators.add_all_features(dataframe)
+        # Can be disabled via feature_flags.wave_indicators
+        if self.config.get('freqai', {}).get('feature_flags', {}).get('wave_indicators', True):
+            dataframe = WaveIndicators.add_all_features(dataframe)
         
         return dataframe
 
@@ -371,13 +383,102 @@ class FreqAIStrategy(IStrategy):
         Required function to set the targets for the model.
         All targets must be prepended with `&` to be recognized by the FreqAI internals.
         
-        Using regression target (% price change) instead of classification
-        to avoid "unseen labels" error when training data is imbalanced.
+        Two labeling methods (MUTUALLY EXCLUSIVE):
+        1. regression_labels: % price change in next 20 candles
+        2. trend_scanning: t-statistics based trend detection (statistically significant trends)
         """
-        # Regression target: % price change in next 20 candles
-        # Positive = price goes up, Negative = price goes down
-        future_close = dataframe["close"].shift(-20)
+        # Get flags
+        flags = self.config.get('freqai', {}).get('feature_flags', {})
+        use_trend_scanning = flags.get('trend_scanning', False)
+        use_regression = flags.get('regression_labels', True)
+        
+        # Validate: they are mutually exclusive
+        if use_trend_scanning and use_regression:
+            raise ValueError(
+                "CONFLICT: 'trend_scanning' và 'regression_labels' không thể cùng True! "
+                "Hãy chọn 1 trong 2 trong config.json → freqai.feature_flags"
+            )
+        
+        if not use_trend_scanning and not use_regression:
+            raise ValueError(
+                "ERROR: Phải enable ít nhất 1 trong 'trend_scanning' hoặc 'regression_labels'! "
+                "Không có labeling method nào được chọn."
+            )
+        
+        if use_trend_scanning:
+            # Trend Scanning: Use rolling linear regression with t-statistics
+            # to detect statistically significant trends
+            logger.info("Using Trend Scanning labeling method")
+            dataframe = self._trend_scanning_labels(dataframe, window=20, t_threshold=2.0)
+        else:
+            # Regression: Simple % price change prediction
+            logger.info("Using Regression labeling method")
+            dataframe = self._regression_labels(dataframe, horizon=20)
+        
+        return dataframe
+    
+    def _regression_labels(self, dataframe: DataFrame, horizon: int = 20) -> DataFrame:
+        """Simple regression target: % price change in next N candles."""
+        future_close = dataframe["close"].shift(-horizon)
         dataframe["&-price_change_pct"] = (future_close - dataframe["close"]) / dataframe["close"]
+        return dataframe
+    
+    def _trend_scanning_labels(self, dataframe: DataFrame, window: int = 20, t_threshold: float = 2.0) -> DataFrame:
+        """
+        Trend Scanning labeling using t-statistics.
+        
+        Method:
+        1. For each point, look forward `window` candles
+        2. Fit linear regression to future prices
+        3. Calculate t-statistic of slope
+        4. If |t| > threshold, trend is statistically significant
+        
+        Returns:
+        - &-price_change_pct: Expected % change (slope * window)
+        - Also creates internal &-trend_direction for classification if needed
+        """
+        import numpy as np
+        from scipy import stats
+        
+        close_prices = dataframe['close'].values
+        n = len(close_prices)
+        
+        # Initialize arrays
+        trend_slopes = np.zeros(n)
+        trend_t_stats = np.zeros(n)
+        
+        x = np.arange(window)
+        
+        for i in range(n - window):
+            y = close_prices[i:i + window]
+            
+            # Linear regression: y = slope * x + intercept
+            slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+            
+            # Calculate t-statistic for slope
+            if std_err > 0:
+                t_stat = slope / std_err
+            else:
+                t_stat = 0
+            
+            # Expected % price change = slope * window / current_price
+            current_price = close_prices[i]
+            if current_price > 0:
+                expected_pct_change = (slope * window) / current_price
+            else:
+                expected_pct_change = 0
+            
+            # Apply t-threshold filter: only significant trends
+            if abs(t_stat) >= t_threshold:
+                trend_slopes[i] = expected_pct_change
+            else:
+                trend_slopes[i] = 0  # Not significant = no clear trend
+            
+            trend_t_stats[i] = t_stat
+        
+        # Assign to dataframe
+        dataframe["&-price_change_pct"] = trend_slopes
+        dataframe["&-trend_t_stat"] = trend_t_stats  # Optional: for analysis
         
         return dataframe
 
@@ -423,6 +524,16 @@ class FreqAIStrategy(IStrategy):
                 # Base: AI prediction positive
                 long_prediction = dataframe[prediction_col] > self.buy_pred_threshold.value
                 
+                # Get flags once
+                flags = self.config.get('freqai', {}).get('feature_flags', {})
+                use_trend_filter = flags.get('trend_filter', True)
+                use_regime_filter = flags.get('regime_filter', True)
+                
+                # NOTE: For LONG entries in uptrend, we DON'T restrict with EMA 200
+                # because in bull market we WANT long trades
+                # EMA filter is used ONLY for SHORT to block counter-trend shorts
+                long_ema_filter = True  # Always allow long entries
+                
                 # Market regime: Use KER or ADX
                 long_regime = True
                 if '%-ker_10' in dataframe.columns:
@@ -463,9 +574,9 @@ class FreqAIStrategy(IStrategy):
                 # Volume active
                 long_volume = dataframe['volume'] > 0
                 
-                # Combine LONG conditions
+                # Combine LONG conditions (added long_ema_filter)
                 dataframe.loc[
-                    long_prediction & long_regime & long_trend_confluence & 
+                    long_prediction & long_ema_filter & long_regime & long_trend_confluence & 
                     long_momentum & long_pressure & long_pattern & 
                     long_structure & long_fg & long_volume,
                     'enter_long'] = 1
@@ -477,9 +588,26 @@ class FreqAIStrategy(IStrategy):
                 # Base: AI prediction negative
                 short_prediction = dataframe[prediction_col] < -self.buy_pred_threshold.value
                 
-                # Market regime: Trending
+                # EMA 200 TREND FILTER (KEY FIX for counter-trend protection)
+                # Only allow SHORT when price < EMA 200 (downtrend)
+                short_ema_filter = True
+                if use_trend_filter:
+                    if '%-dist_to_ema_200' in dataframe.columns:
+                        # dist_to_ema_200 < 0 means price < EMA 200
+                        short_ema_filter = dataframe['%-dist_to_ema_200'] < 0
+                    else:
+                        # Fallback: calculate EMA 200 on the fly
+                        ema_200 = ta.EMA(dataframe['close'], timeperiod=200)
+                        short_ema_filter = dataframe['close'] < ema_200
+                
+                # REGIME FILTER: Only SHORT in bearish/sideways regime
                 short_regime = True
-                if '%-ker_10' in dataframe.columns:
+                if use_regime_filter and '%-market_regime' in dataframe.columns:
+                    # Only short when regime is BEARISH (<0.4)
+                    # Block shorts in bullish or sideways regime (>0.4)
+                    short_regime = dataframe['%-market_regime'] < 0.4
+                elif '%-ker_10' in dataframe.columns:
+                    # Fallback: use KER for trend strength
                     short_regime = dataframe['%-ker_10'] > 0.4
                 elif 'adx' in dataframe.columns:
                     short_regime = dataframe['adx'] > self.buy_adx_threshold.value
@@ -517,9 +645,9 @@ class FreqAIStrategy(IStrategy):
                 # Volume active
                 short_volume = dataframe['volume'] > 0
                 
-                # Combine SHORT conditions
+                # Combine SHORT conditions (added short_ema_filter)
                 dataframe.loc[
-                    short_prediction & short_regime & short_trend &
+                    short_prediction & short_ema_filter & short_regime & short_trend &
                     short_momentum & short_pressure & short_pattern &
                     short_structure & short_rsi & short_volume,
                     'enter_short'] = 1

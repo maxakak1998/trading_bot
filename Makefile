@@ -8,12 +8,12 @@
 STRATEGY := FreqAIStrategy
 FREQAI_MODEL := XGBoostRegressor
 
-TRAIN_TIMERANGE := 20240101-20250101
-BACKTEST_TIMERANGE := 20240101-20250101
+TRAIN_TIMERANGE := 20240101-20240401
+BACKTEST_TIMERANGE := 20240101-20240701
 
-# Hyperopt settings
-HYPEROPT_EPOCHS := 700
-HYPEROPT_LOSS := SortinoHyperOptLossDaily
+# Hyperopt settings - Optimized for Win Rate
+HYPEROPT_EPOCHS ?= 100
+HYPEROPT_LOSS ?= WinRatioHyperOptLoss
 HYPEROPT_SPACES := buy sell roi
 RANDOM_STATE := 42
 
@@ -65,7 +65,7 @@ update: ## Update Freqtrade docker image
 	$(DOCKER_COMPOSE) pull
 
 trade-dry: ## Run Freqtrade in dry-run mode (foreground)
-	$(DOCKER_COMPOSE) run --rm freqtrade trade --dry-run --strategy $(STRATEGY)
+	$(DOCKER_COMPOSE) run --rm freqtrade trade --dry-run --strategy $(STRATEGY) --freqaimodel $(FREQAI_MODEL)
 
 create-userdir: ## Initialize user directory
 	$(DOCKER_COMPOSE) run --rm freqtrade create-userdir --userdir user_data
@@ -77,12 +77,12 @@ list-strategies: ## List available strategies
 # FreqAI Training & Optimization
 # ===========================================
 
-train: ## Train FreqAI model với TRAIN_TIMERANGE + auto backup
+train: clean-models ## Train FreqAI model với TRAIN_TIMERANGE + auto backup
 	@echo "🚀 Starting FreqAI training..."
 	@echo "   Strategy: $(STRATEGY)"
 	@echo "   Model: $(FREQAI_MODEL)"
 	@echo "   Timerange: $(TRAIN_TIMERANGE)"
-	$(DOCKER_COMPOSE) run --rm freqtrade backtesting \
+	$(DOCKER_COMPOSE) run --rm --remove-orphans freqtrade backtesting \
 		--strategy $(STRATEGY) \
 		--timerange $(TRAIN_TIMERANGE) \
 		--freqaimodel $(FREQAI_MODEL)
@@ -121,7 +121,7 @@ live: ## Live trading (REAL MONEY - cẩn thận!)
 		--strategy $(STRATEGY) \
 		--freqaimodel $(FREQAI_MODEL)
 
-hyperopt: ## Hyperopt optimization với TRAIN_TIMERANGE
+hyperopt:
 	@echo "🚀 Starting hyperopt..."
 	@echo "   Timerange: $(TRAIN_TIMERANGE)"
 	@echo "   Epochs: $(HYPEROPT_EPOCHS)"
@@ -135,11 +135,12 @@ hyperopt: ## Hyperopt optimization với TRAIN_TIMERANGE
 		--spaces $(HYPEROPT_SPACES) \
 		--timerange $(TRAIN_TIMERANGE) \
 		--random-state $(RANDOM_STATE) \
-		--j 1
-		--verbose
+		-j 2
 	@echo "✅ Hyperopt complete! Use 'make hyperopt-show' to see best results"
 	@echo "💾 Backing up new models..."
 	./scripts/backup_to_drive.sh models
+
+
 
 hyperopt-show: ## Show best hyperopt results
 	$(DOCKER_COMPOSE) run --rm freqtrade hyperopt-show --best
@@ -256,6 +257,22 @@ gcp-ssh: ## SSH into freqtrade-live VM
 
 gcp-logs: ## View logs from freqtrade-live VM
 	gcloud compute ssh freqtrade-live --zone=$(GCP_ZONE) --project=$(GCP_PROJECT) --command="cd /opt/freqtrade && docker compose logs -f --tail=100"
+
+# Simple GCP Training (sử dụng $300 credit)
+gcp-create-small: ## Create small VM (16 vCPU) ~$0.60/h
+	./scripts/gcp_create.sh small
+
+gcp-create-medium: ## Create medium VM (32 vCPU) ~$1.20/h  
+	./scripts/gcp_create.sh medium
+
+gcp-create-beast: ## Create BEAST VM (128 vCPU) ~$1.94/h
+	./scripts/gcp_create.sh beast
+
+gcp-train-remote: ## Run training on GCP with auto-shutdown
+	./scripts/gcp_train.sh $(STRATEGY) $(TRAIN_TIMERANGE)
+
+gcp-destroy-train: ## Destroy training VM (stop charges!)
+	./scripts/gcp_destroy.sh
 
 # ===========================================
 # Debugging & Monitoring

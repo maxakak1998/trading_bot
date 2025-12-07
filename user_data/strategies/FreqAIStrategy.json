@@ -1,0 +1,37 @@
+{
+  "strategy_name": "FreqAIStrategy",
+  "params": {
+    "stoploss": {
+      "stoploss": -0.03,
+      "atr_multiplier": 3.0
+    },
+    "trailing": {
+      "trailing_stop": false,
+      "trailing_stop_positive": 0.02,
+      "trailing_stop_positive_offset": 0.04,
+      "trailing_only_offset_is_reached": false
+    },
+    "max_open_trades": {
+      "max_open_trades": 3
+    },
+    "buy": {
+      "buy_adx_threshold": 15,
+      "buy_pred_threshold": 0.03,
+      "buy_rsi_high": 81,
+      "buy_rsi_low": 34,
+      "confidence_threshold": 0.463
+    },
+    "sell": {
+      "sell_pred_threshold": -0.026,
+      "sell_rsi_threshold": 68
+    },
+    "roi": {
+      "0": 0.121,
+      "39": 0.054,
+      "63": 0.014,
+      "120": 0
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2025-12-07 10:19:52.839469+00:00"
+}

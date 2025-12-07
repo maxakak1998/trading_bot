@@ -6,7 +6,7 @@
 
 set -e
 
-PROJECT_ID="${GCP_PROJECT_ID:-freqtrade-trading}"
+PROJECT_ID="${GCP_PROJECT_ID:-gen-lang-client-0733808683}"
 ZONE="${GCP_ZONE:-us-central1-a}"
 VM_NAME="${1:-freqtrade-live}"
 LOCAL_PATH="$(dirname "$0")/../.."

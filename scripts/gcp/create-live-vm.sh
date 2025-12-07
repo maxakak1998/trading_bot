@@ -6,7 +6,7 @@
 
 set -e
 
-PROJECT_ID="${GCP_PROJECT_ID:-freqtrade-trading}"
+PROJECT_ID="${GCP_PROJECT_ID:-gen-lang-client-0733808683}"
 ZONE="${GCP_ZONE:-us-central1-a}"
 VM_NAME="freqtrade-live"
 MACHINE_TYPE="e2-small"  # 2 vCPUs, 2GB RAM
@@ -22,7 +22,7 @@ gcloud compute instances create $VM_NAME \
     --machine-type=$MACHINE_TYPE \
     --boot-disk-size=30GB \
     --boot-disk-type=pd-standard \
-    --image-family=debian-11 \
+    --image-family=debian-12 \
     --image-project=debian-cloud \
     --tags=freqtrade-server \
     --metadata=startup-script='#!/bin/bash

@@ -6,7 +6,7 @@
 
 set -e
 
-PROJECT_ID="${GCP_PROJECT_ID:-freqtrade-trading}"
+PROJECT_ID="${GCP_PROJECT_ID:-gen-lang-client-0733808683}"
 REGION="${GCP_REGION:-us-central1}"
 ZONE="${GCP_ZONE:-us-central1-a}"
 
@@ -81,7 +81,35 @@ echo "   1. Go to: https://console.cloud.google.com/billing/budgets"
 echo "   2. Create alerts at: $50, $100, $200, $280"
 echo ""
 
-echo "✅ GCP Project setup complete!"
+# =====================================================
+# GOOGLE DRIVE BACKUP SETUP
+# =====================================================
+echo ""
+echo "============================================================"
+echo "  📁 GOOGLE DRIVE BACKUP SETUP"
+echo "============================================================"
+echo ""
+echo "FreqTrade sử dụng Google Drive để backup models sau mỗi lần train."
+echo ""
+read -p "Bạn muốn setup Google Drive backup? [Y/n] " setup_gdrive
+
+if [[ ! "$setup_gdrive" =~ ^[Nn] ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ -f "${SCRIPT_DIR}/../setup_gdrive.sh" ]; then
+        bash "${SCRIPT_DIR}/../setup_gdrive.sh"
+    else
+        echo "⚠️  setup_gdrive.sh not found at ${SCRIPT_DIR}/../setup_gdrive.sh"
+        echo "   Bạn có thể chạy thủ công: ./scripts/setup_gdrive.sh"
+    fi
+else
+    echo "Bỏ qua Google Drive setup."
+    echo "Chạy sau: ./scripts/setup_gdrive.sh"
+fi
+
+echo ""
+echo "============================================================"
+echo "  🎉 SETUP HOÀN TẤT!"
+echo "============================================================"
 echo ""
 echo "📋 Project Details:"
 echo "   Project ID: $PROJECT_ID"
@@ -90,5 +118,16 @@ echo "   Zone: $ZONE"
 echo "   Backup Bucket: gs://$BUCKET_NAME"
 echo ""
 echo "🎯 Next steps:"
-echo "   1. Run: ./scripts/gcp/create-hyperopt-vm.sh"
-echo "   2. Or run: make gcp-hyperopt"
+echo ""
+echo "   1. Tạo VM training:"
+echo "      ./scripts/gcp/create-train-vm.sh"
+echo ""
+echo "   2. Hoặc chạy hyperopt:"
+echo "      ./scripts/gcp/create-hyperopt-vm.sh"
+echo ""
+echo "   3. Backup thủ công:"
+echo "      ./scripts/backup_to_drive.sh full"
+echo ""
+echo "   4. XÓA VM khi xong (quan trọng!):"
+echo "      ./scripts/gcp/teardown.sh"
+echo "============================================================"
