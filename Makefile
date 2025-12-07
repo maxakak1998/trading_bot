@@ -23,6 +23,7 @@ GCP_PROJECT := $(shell gcloud config get-value project 2>/dev/null)
 
 # Docker
 DOCKER_COMPOSE := docker compose
+DOCKER_IMAGE ?= freqtradeorg/freqtrade:develop_freqai
 
 # Trading pairs and mode for data download
 PAIRS := BTC/USDT:USDT ETH/USDT:USDT
@@ -82,13 +83,24 @@ train: clean-models ## Train FreqAI model với TRAIN_TIMERANGE + auto backup
 	@echo "   Strategy: $(STRATEGY)"
 	@echo "   Model: $(FREQAI_MODEL)"
 	@echo "   Timerange: $(TRAIN_TIMERANGE)"
+	@echo "   Docker Image: $(DOCKER_IMAGE)"
+ifeq ($(DOCKER_IMAGE),freqtradeorg/freqtrade:develop_freqai)
 	$(DOCKER_COMPOSE) run --rm --remove-orphans freqtrade backtesting \
 		--strategy $(STRATEGY) \
 		--timerange $(TRAIN_TIMERANGE) \
 		--freqaimodel $(FREQAI_MODEL)
-	@echo "✅ Training complete! Starting backup..."
-	./scripts/backup_to_drive.sh incremental
-	@echo "☁️ Backup to Google Drive complete!"
+else
+	sudo docker run --rm \
+		-v $$(pwd)/user_data:/freqtrade/user_data \
+		-v $$(pwd)/user_data/config.json:/freqtrade/config.json \
+		$(DOCKER_IMAGE) backtesting \
+		--strategy $(STRATEGY) \
+		--timerange $(TRAIN_TIMERANGE) \
+		--freqaimodel $(FREQAI_MODEL)
+endif
+	@echo "✅ Training complete!"
+	-./scripts/backup_to_drive.sh incremental 2>/dev/null || true
+	@echo "☁️ Backup attempted (might fail on GCP)"
 
 backtest: ## Run backtesting với BACKTEST_TIMERANGE
 	@echo "📊 Running backtest..."

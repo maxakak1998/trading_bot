@@ -90,13 +90,29 @@ if ! gcloud compute instances describe $VM_NAME --zone=$ZONE &>/dev/null; then
     echo "⏳ Waiting for VM to be ready..."
     sleep 30
 
-    # Install Docker
-    echo "🐳 Installing Docker..."
+    # Install Docker and build custom image
+    echo "🐳 Installing Docker and building custom image..."
     gcloud compute ssh $VM_NAME --zone=$ZONE --command="
         sudo apt-get update -qq
         sudo apt-get install -y docker.io docker-compose git make -qq
         sudo systemctl start docker
         sudo usermod -aG docker \$USER
+        
+        # Pull base image
+        sudo docker pull freqtradeorg/freqtrade:develop_freqai
+        
+        # Create Dockerfile with datasieve fix
+        cat > /tmp/Dockerfile << 'DOCKERFILE'
+FROM freqtradeorg/freqtrade:develop_freqai
+
+# Fix datasieve version for ftuser
+USER ftuser
+RUN pip uninstall -y datasieve && pip install datasieve==0.1.9
+DOCKERFILE
+        
+        # Build custom image
+        cd /tmp && sudo docker build -t freqtrade-custom:latest .
+        echo '✅ Custom Docker image built'
     "
 fi
 
@@ -148,23 +164,20 @@ echo "✅ Config files uploaded"
 echo ""
 echo "🎯 Step 5/5: Running training via Makefile..."
 
-# Pull Docker image and start training
+# Start training with custom image
 gcloud compute ssh $VM_NAME --zone=$ZONE --command="
     cd /opt/freqtrade
-    
-    # Pull Docker image
-    sudo docker pull freqtradeorg/freqtrade:develop_freqai
     
     # Create directories
     mkdir -p user_data/models
     
-    # Run make train (background)
-    echo 'Starting training...'
-    nohup make train TRAIN_TIMERANGE=$TRAIN_TIMERANGE > train.log 2>&1 &
+    # Run make train with custom image (background)
+    echo 'Starting training with custom Docker image...'
+    nohup make train TRAIN_TIMERANGE=$TRAIN_TIMERANGE DOCKER_IMAGE=freqtrade-custom:latest > train.log 2>&1 &
     
     echo 'Training started in background'
-    sleep 5
-    tail -20 train.log
+    sleep 10
+    tail -30 train.log || echo 'Waiting for log...'
 "
 
 # Get VM IP
