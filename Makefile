@@ -19,7 +19,9 @@ RANDOM_STATE := 42
 JOBS ?= 2  # Local: 2, GCP: 28
 
 # GCP settings
-GCP_ZONE := us-central1-a
+GCP_ZONE ?= asia-southeast1-b
+GCP_VM ?= trading-bot
+GCP_JOBS ?= 28
 GCP_PROJECT := $(shell gcloud config get-value project 2>/dev/null)
 
 # Docker
@@ -259,33 +261,159 @@ compare-models: ## Compare all model backtest results
 # GCP Cloud Operations
 # ===========================================
 
+gcp-pipeline: ## One-click: create VM, clone, train (full pipeline)
+	./scripts/gcp/one-click-hyperopt.sh
+
+gcp-train-vm: ## Run training on existing GCP VM (28 CPUs)
+	@echo "🚀 Starting training on GCP VM $(GCP_VM)..."
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+		rm -rf user_data/models/* && \
+		nohup sudo docker run --rm \
+			-v \$$(pwd)/user_data:/freqtrade/user_data \
+			-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
+			freqtrade-custom:latest backtesting \
+			--strategy $(STRATEGY) \
+			--freqaimodel $(FREQAI_MODEL) \
+			--timerange $(TRAIN_TIMERANGE) \
+		> train.log 2>&1 & echo 'Training started' && sleep 5 && tail -30 train.log"
+
+gcp-hyperopt-vm: ## Run hyperopt on existing GCP VM (28 CPUs, 800 epochs)
+	@echo "🎯 Starting hyperopt on GCP VM $(GCP_VM)..."
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+		nohup sudo docker run --rm \
+			-v \$$(pwd)/user_data:/freqtrade/user_data \
+			-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
+			freqtrade-custom:latest hyperopt \
+			--strategy $(STRATEGY) \
+			--freqaimodel $(FREQAI_MODEL) \
+			--hyperopt-loss $(HYPEROPT_LOSS) \
+			--epochs $(HYPEROPT_EPOCHS) \
+			--spaces $(HYPEROPT_SPACES) \
+			--timerange $(TRAIN_TIMERANGE) \
+			--random-state $(RANDOM_STATE) \
+			-j $(GCP_JOBS) \
+		> hyperopt.log 2>&1 & echo 'Hyperopt started' && sleep 5 && tail -30 hyperopt.log"
+
+gcp-logs: ## Watch training/hyperopt logs on GCP VM
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && tail -f train.log hyperopt.log 2>/dev/null || tail -f train.log"
+
+gcp-status: ## Check if training/hyperopt is done on GCP VM
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+		if sudo docker ps | grep -q freqtrade; then \
+			echo '⏳ RUNNING...'; \
+			sudo docker ps --format 'table {{.Image}}\t{{.Status}}'; \
+		else \
+			echo '✅ DONE - No container running'; \
+		fi && \
+		echo '---' && \
+		tail -3 train.log hyperopt.log 2>/dev/null | head -10"
+
+gcp-resources: ## Monitor CPU/RAM usage on GCP VM
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="echo '=== CPU ===' && top -bn1 | head -5 && echo '' && echo '=== Memory ===' && free -h && echo '' && echo '=== Docker ===' && sudo docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'"
+
+# =============================================================================
+# GCP Automated Flows (Fire & Forget)
+# =============================================================================
+
+gcp-sync: ## Auto-sync: Commit/Push Local -> Pull on VM -> Upload Config
+	@echo "🔄 Syncing code to GCP..."
+	-git add .
+	-git commit -m "Auto-sync for GCP run $$(date +%Y-%m-%d_%H-%M-%S)"
+	git push
+	@echo "⬇️  Pulling on VM..."
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && git pull"
+	@echo "Ns Uploading config..."
+	@gcloud compute scp user_data/config.json $(GCP_VM):/opt/freqtrade/user_data/ --zone=$(GCP_ZONE)
+	@echo "✅ Sync complete!"
+
+gcp-flow-train: gcp-sync ## Auto: Sync -> Train -> Backup -> Stop VM
+	@echo "🚀 Starting AUTO-FLOW: Train -> Backup -> Stop on $(GCP_VM)..."
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+		nohup bash -c ' \
+			echo \"[1/3] Training started...\" > flow.log; \
+			rm -rf user_data/models/*; \
+			sudo docker run --rm \
+				-v \$$(pwd)/user_data:/freqtrade/user_data \
+				-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
+				freqtrade-custom:latest backtesting \
+				--strategy $(STRATEGY) \
+				--freqaimodel $(FREQAI_MODEL) \
+				--timerange $(TRAIN_TIMERANGE) > train.log 2>&1; \
+			echo \"[2/3] Backing up models...\" >> flow.log; \
+			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost; \
+			rclone copy user_data/strategies/FreqAIStrategy.json gdrive:freqtrade-backup/strategies/; \
+			echo \"[3/3] Stopping VM...\" >> flow.log; \
+			sudo poweroff; \
+		' > flow_debug.log 2>&1 & \
+	"
+	@echo "✅ Flow submitted! VM will stop automatically when done."
+
+gcp-flow-hyperopt: gcp-sync ## Auto: Sync -> Hyperopt -> Backup -> Stop VM
+	@echo "🎯 Starting AUTO-FLOW: Hyperopt -> Backup -> Stop on $(GCP_VM)..."
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+		nohup bash -c ' \
+			echo \"[1/3] Hyperopt started...\" > flow.log; \
+			sudo docker run --rm \
+				-v \$$(pwd)/user_data:/freqtrade/user_data \
+				-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
+				freqtrade-custom:latest hyperopt \
+				--strategy $(STRATEGY) \
+				--freqaimodel $(FREQAI_MODEL) \
+				--hyperopt-loss $(HYPEROPT_LOSS) \
+				--epochs $(HYPEROPT_EPOCHS) \
+				--spaces $(HYPEROPT_SPACES) \
+				--timerange $(TRAIN_TIMERANGE) \
+				--random-state $(RANDOM_STATE) \
+				-j $(GCP_JOBS) > hyperopt.log 2>&1; \
+			echo \"[2/3] Backing up results...\" >> flow.log; \
+			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost; \
+			rclone copy user_data/strategies/FreqAIStrategy.json gdrive:freqtrade-backup/strategies/; \
+			rclone copy hyperopt.log gdrive:freqtrade-backup/; \
+			echo \"[3/3] Stopping VM...\" >> flow.log; \
+			sudo poweroff; \
+		' > flow_debug.log 2>&1 & \
+	"
+	@echo "✅ Flow submitted! VM will stop automatically when done."
+
+gcp-download: ## Download hyperopt results and models from GCP VM
+	@echo "📥 Downloading from GCP VM $(GCP_VM)..."
+	-gcloud compute scp $(GCP_VM):/opt/freqtrade/user_data/strategies/FreqAIStrategy.json user_data/strategies/ --zone=$(GCP_ZONE)
+	-gcloud compute scp -r $(GCP_VM):/opt/freqtrade/user_data/models/freqai-xgboost user_data/models/ --zone=$(GCP_ZONE)
+	-gcloud compute scp $(GCP_VM):/opt/freqtrade/hyperopt.log . --zone=$(GCP_ZONE) 2>/dev/null || true
+	@echo "✅ Downloaded results from GCP"
+	@echo "☁️ Backing up to Google Drive..."
+	-./scripts/backup_to_drive.sh models 2>/dev/null || echo "⚠️  Google Drive backup skipped (rclone not configured)"
+
+gcp-ssh: ## SSH into GCP VM
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE)
+
+gcp-setup-rclone: ## Setup rclone on GCP VM for Google Drive backup
+	@echo "🔧 Setting up rclone on GCP VM..."
+	gcloud compute scp ~/.config/rclone/rclone.conf $(GCP_VM):/tmp/rclone.conf --zone=$(GCP_ZONE)
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="sudo apt-get install -y rclone -qq && mkdir -p ~/.config/rclone && mv /tmp/rclone.conf ~/.config/rclone/ && rclone listremotes"
+	@echo "✅ Rclone configured on VM"
+
+gcp-backup: ## Backup models from GCP VM to Google Drive
+	@echo "☁️ Backing up from GCP VM to Google Drive..."
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost --progress"
+	gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && rclone copy user_data/strategies/FreqAIStrategy.json gdrive:freqtrade-backup/strategies/ --progress"
+	@echo "✅ Backed up to Google Drive"
+
+gcp-delete: ## Delete GCP VM (stop ALL charges)
+	gcloud compute instances delete $(GCP_VM) --zone=$(GCP_ZONE) --quiet
+	@echo "✅ VM $(GCP_VM) deleted"
+
+gcp-stop: ## Stop GCP VM (keep data, stop compute charges)
+	gcloud compute instances stop $(GCP_VM) --zone=$(GCP_ZONE)
+	@echo "✅ VM $(GCP_VM) stopped (disk still charged ~$$4/month)"
+
+gcp-start: ## Start stopped GCP VM
+	gcloud compute instances start $(GCP_VM) --zone=$(GCP_ZONE)
+	@echo "✅ VM $(GCP_VM) started"
+
 gcp-setup: ## Setup GCP project and enable APIs
 	@chmod +x scripts/gcp/*.sh
 	./scripts/gcp/setup-project.sh
-
-gcp-hyperopt: ## Create Spot VM for massive hyperopt
-	./scripts/gcp/create-hyperopt-vm.sh
-
-gcp-tournament: ## Create 3 VMs for model tournament
-	./scripts/gcp/create-tournament.sh
-
-gcp-live: ## Create production VM for live trading
-	./scripts/gcp/create-live-vm.sh
-
-gcp-deploy: ## Deploy to production VM
-	./scripts/gcp/deploy.sh
-
-gcp-teardown: ## Delete all GCP VMs (save costs!)
-	./scripts/gcp/teardown.sh
-
-gcp-status: ## Check status of all GCP VMs
-	@gcloud compute instances list --filter="name~freqtrade" --project=$(GCP_PROJECT)
-
-gcp-ssh: ## SSH into freqtrade-live VM
-	gcloud compute ssh freqtrade-live --zone=$(GCP_ZONE) --project=$(GCP_PROJECT)
-
-gcp-logs: ## View logs from freqtrade-live VM
-	gcloud compute ssh freqtrade-live --zone=$(GCP_ZONE) --project=$(GCP_PROJECT) --command="cd /opt/freqtrade && docker compose logs -f --tail=100"
 
 # Simple GCP Training (sử dụng $300 credit)
 gcp-create-small: ## Create small VM (16 vCPU) ~$0.60/h

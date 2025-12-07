@@ -144,6 +144,20 @@ if [[ -f ".env" ]]; then
     echo "   ✅ .env uploaded"
 fi
 
+# Upload rclone config for Google Drive backup
+if [[ -f "$HOME/.config/rclone/rclone.conf" ]]; then
+    echo "   📤 Uploading rclone config..."
+    gcloud compute scp $HOME/.config/rclone/rclone.conf $VM_NAME:/tmp/rclone.conf --zone=$ZONE
+    gcloud compute ssh $VM_NAME --zone=$ZONE --command="
+        sudo apt-get install -y rclone -qq
+        mkdir -p ~/.config/rclone
+        mv /tmp/rclone.conf ~/.config/rclone/
+    "
+    echo "   ✅ rclone configured"
+else
+    echo "   ⚠️ No rclone config found at ~/.config/rclone/rclone.conf"
+fi
+
 echo "✅ Config files uploaded"
 
 # =============================================================================
