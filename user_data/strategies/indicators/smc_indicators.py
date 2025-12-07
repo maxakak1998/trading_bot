@@ -55,6 +55,10 @@ class SMCIndicators:
         # Single concat - much faster than individual inserts
         if features:
             features_df = pd.DataFrame(features, index=dataframe.index)
+            # CRITICAL FIX: Fill NaNs (e.g. initial period before first OB is found)
+            # FreqAI drops rows with NaNs, so we must fill them.
+            # 0 is acceptable because we have other flags (like %-testing_ob) to clarify context.
+            features_df = features_df.ffill().fillna(0)
             dataframe = pd.concat([dataframe, features_df], axis=1)
         
         logger.info("SMC Indicators added successfully")
@@ -214,7 +218,7 @@ class SMCIndicators:
     
     @staticmethod
     def _calc_order_blocks(dataframe: DataFrame, features: dict, 
-                           lookback: int = 50, displacement_pct: float = 0.02) -> None:
+                           lookback: int = 50, displacement_pct: float = 0.005) -> None:
         """
         Order Block Detection - Phát hiện vùng lệnh tổ chức.
         

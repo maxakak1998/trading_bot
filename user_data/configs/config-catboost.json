@@ -98,13 +98,13 @@
                 "ETH/USDT"
             ],
             "label_period_candles": 20,
-            "include_shifted_candles": 3,
+            "include_shifted_candles": 1,
             "indicator_periods_candles": [
-                10,
                 14,
-                20,
-                50
+                20
             ],
+            "principal_component_analysis": true,
+            "noise_standard_deviation": 0.05,
             "plot_feature_importances": 10
         },
         "data_split_parameters": {

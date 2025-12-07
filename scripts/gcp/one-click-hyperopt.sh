@@ -34,20 +34,11 @@ cd "$(dirname "$0")/../.."
 
 # Check for uncommitted changes
 if [[ -n $(git status -s) ]]; then
-    echo "⚠️  WARNING: You have uncommitted changes!"
-    git status -s
-    echo ""
-    read -p "Do you want to commit and push now? (y/n): " commit_choice
-    if [[ "$commit_choice" == "y" ]]; then
-        read -p "Enter commit message: " commit_msg
-        git add -A
-        git commit -m "$commit_msg"
-        git push origin main
-        echo "✅ Changes committed and pushed"
-    else
-        echo "❌ Aborting. Please commit your changes first."
-        exit 1
-    fi
+    echo "⚠️  Uncommitted changes detected. Auto-committing..."
+    git add -A
+    git commit -m "auto: GCP pipeline commit $(date +%Y%m%d_%H%M%S)"
+    git push origin main
+    echo "✅ Changes auto-committed and pushed"
 else
     echo "✅ No uncommitted changes"
 fi
@@ -58,16 +49,9 @@ fi
 echo ""
 echo "📦 Step 2/5: Creating VM..."
 
-# Check if VM exists
+# Check if VM exists - use existing if available
 if gcloud compute instances describe $VM_NAME --zone=$ZONE &>/dev/null; then
-    echo "⚠️  VM $VM_NAME already exists"
-    read -p "Delete and recreate? (y/n): " recreate
-    if [[ "$recreate" == "y" ]]; then
-        gcloud compute instances delete $VM_NAME --zone=$ZONE --quiet
-        echo "   Deleted existing VM"
-    else
-        echo "   Using existing VM"
-    fi
+    echo "✅ VM $VM_NAME already exists, using existing VM"
 fi
 
 # Create VM if not exists

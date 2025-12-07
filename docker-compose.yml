@@ -10,13 +10,7 @@ services:
       - "./user_data:/freqtrade/user_data"
       - "./scripts:/scripts:ro"
     entrypoint: ["/bin/bash", "/scripts/entrypoint.sh"]
-    # Memory limits for Mac Mini M4 32GB - prevents OOM (Error 137)
-    deploy:
-      resources:
-        limits:
-          memory: 24g
-        reservations:
-          memory: 8g
+
     # Default command, can be overridden
     command: >
       trade

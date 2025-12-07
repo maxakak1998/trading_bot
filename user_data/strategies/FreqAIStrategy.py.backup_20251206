@@ -1,0 +1,648 @@
+# pragma pylint: disable=missing-docstring, invalid-name, pointless-string-statement
+# flake8: noqa: F401
+# isort: skip_file
+# --- Do not remove these libs ---
+from datetime import datetime
+from typing import Optional
+import numpy as np
+import pandas as pd
+from pandas import DataFrame
+from freqtrade.strategy import IStrategy, IntParameter, DecimalParameter, CategoricalParameter
+import logging
+from pandas import DataFrame
+import pandas_ta as pta  # pandas_ta for advanced indicators
+import talib.abstract as ta  # talib for basic indicators (required by FreqAI)
+import sys
+from pathlib import Path
+
+# Add strategies directory to path to import local modules
+sys.path.append(str(Path(__file__).parent))
+from indicators.smc_indicators import SMCIndicators
+from indicators.data_enhancement import DataEnhancement  # Phase 2 Features
+from indicators.feature_engineering import FeatureEngineering  # Phase 3: Proper ML Features
+from indicators.chart_patterns import ChartPatterns  # Phase 3: Chart Pattern Recognition
+from indicators.wave_indicators import WaveIndicators  # Phase 3: Elliott Wave Lite (Fibonacci + AO)
+
+logger = logging.getLogger(__name__)
+import freqtrade.vendor.qtpylib.indicators as qtpylib
+
+class FreqAIStrategy(IStrategy):
+    """
+    FreqAI Strategy example.
+    """
+    INTERFACE_VERSION = 3
+    
+    # =====================================================
+    # STARTUP CANDLE COUNT - Required for feature warmup
+    # =====================================================
+    # This tells FreqTrade how many candles are needed to calculate all indicators
+    # before making predictions. Features with longest lookback:
+    # - EMA 200 = 200 candles
+    # - Rolling windows up to 50 periods
+    # - Chart patterns need ~100 candles
+    # Total: 200 base + 100 buffer = 300 candles minimum on base timeframe
+    # Note: FreqAI will also add train_period_days * candles_per_day on top
+    # FIX: Increased to 1000 to cover EMA 630 in SMC indicators
+    startup_candle_count: int = 1000  # ~3.5 days on 5m timeframe
+    
+    # =====================================================
+    # HYPEROPT PARAMETERS - Tunable via `freqtrade hyperopt`
+    # =====================================================
+    
+    # Entry/Exit prediction thresholds
+    # OPTIMIZED: Raised default from 0.015 to 0.02 to require stronger AI prediction
+    buy_pred_threshold = DecimalParameter(0.005, 0.03, default=0.02, space="buy", optimize=True)
+    sell_pred_threshold = DecimalParameter(-0.03, -0.005, default=-0.02, space="sell", optimize=True)
+    
+    # Trend filter - ADX threshold
+    buy_adx_threshold = IntParameter(15, 35, default=25, space="buy", optimize=True)
+    
+    # RSI filters
+    buy_rsi_low = IntParameter(20, 40, default=30, space="buy", optimize=True)
+    buy_rsi_high = IntParameter(60, 85, default=70, space="buy", optimize=True)
+    sell_rsi_threshold = IntParameter(65, 85, default=75, space="sell", optimize=True)
+    
+    # ATR multiplier for dynamic stoploss (used in custom_stoploss)
+    atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="stoploss", optimize=True)
+    
+    # Confidence threshold for trade entries
+    confidence_threshold = DecimalParameter(0.3, 0.7, default=0.5, space="buy", optimize=True)
+    
+    # =====================================================
+    
+    # Minimal ROI designed for the strategy.
+    # OPTIMIZED: Aim for higher profits (4-10%) to improve Risk/Reward
+    minimal_roi = {
+        "120": 0.02,
+        "60": 0.04,
+        "30": 0.06,
+        "0": 0.10
+    }
+
+    # Risk Management - FIXED STOPLOSS (no trailing)
+    # With 20% max risk: -5% stoploss means leverage = 20%/5% = 4x
+    # OPTIMIZED: Tighter stoploss (-3%) to cut losses early
+    stoploss = -0.03
+    
+    # CRITICAL: Trailing stop DISABLED to avoid early exits
+    # Previous backtests showed trailing_stop caused 54% of trades to lose
+    # User requested NO trailing stop
+    trailing_stop = False
+    trailing_stop_positive = 0.02  # Disabled
+    trailing_stop_positive_offset = 0.04  # Disabled
+    trailing_only_offset_is_reached = False
+    
+    # Use ROI and exit signals instead of trailing
+    use_exit_signal = True
+    exit_profit_only = False
+    ignore_roi_if_entry_signal = False
+    
+    # Maximum risk per trade (% of margin)
+    # 20% max loss per trade on margin
+    # Example: With 4x leverage, actual price loss = 20%/4 = 5%
+    max_risk_per_trade = 0.20  # 20% of stake (margin)
+    
+    # Leverage calculation:
+    # Target Risk per Trade = max_risk_per_trade% of Stake (Margin)
+    # Loss = Stake * Leverage * Stoploss_Price_Dist
+    # max_risk_per_trade * Stake = Stake * Leverage * Stoploss_Price_Dist
+    # Leverage = max_risk_per_trade / Stoploss_Price_Dist
+    
+    def leverage(self, pair: str, current_time: datetime, current_rate: float,
+                 proposed_leverage: float, max_leverage: float, entry_tag: Optional[str], side: str,
+                 **kwargs) -> float:
+        """
+        Customize leverage for each new trade.
+        Uses max_risk_per_trade to calculate appropriate leverage.
+        """
+        risk_per_trade = self.max_risk_per_trade  # Use configurable risk limit
+        stoploss_dist = abs(self.stoploss)
+        
+        # Calculate leverage
+        # Example: Stoploss 5% (0.05) -> Leverage = 0.20 / 0.05 = 4x
+        # Example: Stoploss 1% (0.01) -> Leverage = 0.20 / 0.01 = 20x
+        
+        target_leverage = risk_per_trade / stoploss_dist
+        
+        # Cap leverage at max_leverage or a safe limit (e.g. 20x)
+        final_leverage = min(target_leverage, max_leverage, 20.0)
+        
+        return final_leverage
+    
+    def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime,
+                       current_rate: float, current_profit: float, **kwargs) -> float:
+        """
+        Custom stoploss logic, based on ATR (Average True Range).
+        Returns a negative percentage value relative to current_rate.
+        
+        High volatility (high ATR) → Wider stoploss
+        Low volatility (low ATR) → Tighter stoploss
+        
+        SAFETY: Stoploss is CLIPPED to ensure max loss never exceeds 20% of margin.
+        Formula: Max_SL_Price = Max_Risk(20%) / Leverage
+        """
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        last_candle = dataframe.iloc[-1].squeeze()
+        
+        # Get ATR from last candle
+        atr = last_candle.get('atr', 0)
+        
+        # Get current leverage of the trade (default 1x if not available)
+        current_leverage = getattr(trade, 'leverage', 1.0) or 1.0
+        
+        # SAFETY LIMIT: Max risk = max_risk_per_trade% of margin
+        # Max_SL_Price = Max_Risk / Leverage
+        # Example: Leverage 5x, Risk 20% → Max SL = 20% / 5 = -4%
+        # Example: Leverage 10x, Risk 20% → Max SL = 20% / 10 = -2%
+        # Example: Leverage 20x, Risk 20% → Max SL = 20% / 20 = -1%
+        max_risk_on_margin = self.max_risk_per_trade  # Use configurable risk limit
+        safe_sl_limit = -(max_risk_on_margin / current_leverage)
+        
+        if atr > 0 and trade.open_rate > 0:
+            # Stoploss = atr_multiplier * (ATR / open_rate)
+            # HYPEROPT: atr_multiplier is tunable (default 3.0)
+            # FIX: Using trade.open_rate instead of current_rate to avoid trailing effect
+            # Example: ATR = 2000, Price = 40000, mult = 3 → SL = -3 * (2000/40000) = -15%
+            # Using 3x ATR gives more room for price movement before stop
+            dynamic_sl = -self.atr_multiplier.value * (atr / trade.open_rate)
+            
+            # Apply safety limits:
+            # 1. Cannot be wider than safe_sl_limit (protect margin)
+            # 2. Cannot be tighter than -1% (allow some movement)
+            # 3. Cannot be wider than -8% absolute max (Tightened from -15% to improve R:R)
+            final_sl = max(dynamic_sl, safe_sl_limit, -0.08)  # Not wider than limit
+            final_sl = min(final_sl, -0.01)  # Not tighter than 1%
+            
+            logger.debug(f"{pair}: ATR-SL={dynamic_sl:.2%}, SafeLimit={safe_sl_limit:.2%}, "
+                        f"Leverage={current_leverage}x, FinalSL={final_sl:.2%}")
+            
+            return final_sl
+        
+        # Fallback to static stoploss if ATR not available
+        return max(self.stoploss, safe_sl_limit)
+    
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                           proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                           leverage: float, entry_tag: Optional[str], side: str,
+                           **kwargs) -> float:
+        """
+        Customize stake amount for each trade based on AI confidence.
+        
+        Logic:
+        - Low confidence (0.5-0.6): 50% of base stake (25 USDT)
+        - Medium confidence (0.6-0.8): 100% of base stake (50 USDT)
+        - High confidence (>0.8): 120% of base stake (60 USDT)
+        """
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        last_candle = dataframe.iloc[-1].squeeze()
+        
+        # Get AI confidence score (prediction mean)
+        ai_confidence = last_candle.get('&s-up_or_down_mean', 0.5)
+        
+        # Scale stake based on confidence
+        if ai_confidence > 0.8:
+            stake_multiplier = 1.2  # High confidence: 120%
+        elif ai_confidence > 0.6:
+            stake_multiplier = 1.0  # Medium confidence: 100%
+        else:
+            stake_multiplier = 0.5  # Low confidence: 50%
+        
+        final_stake = proposed_stake * stake_multiplier
+        
+        # Ensure within min/max bounds
+        if min_stake:
+            final_stake = max(final_stake, min_stake)
+        final_stake = min(final_stake, max_stake)
+        
+        return final_stake
+
+    # Timeframe
+    timeframe = '5m'
+    process_only_new_candles = True
+    use_exit_signal = True
+    exit_profit_only = False
+    ignore_roi_if_entry_signal = False
+
+    # FreqAI attributes
+    can_short = True
+
+    def detect_market_regime(self, dataframe: DataFrame) -> DataFrame:
+        """
+        Classify market regime: TREND, SIDEWAY, or VOLATILE
+        
+        Logic:
+        - ADX > 25 + BB Width > 0.04 → TREND (strong directional movement)
+        - ADX < 20 + BB Width < 0.02 → SIDEWAY (no clear direction)
+        - Otherwise → VOLATILE (unpredictable, avoid trading)
+        """
+        # Ensure ADX is calculated (using talib - uppercase function names)
+        if 'adx' not in dataframe.columns:
+            dataframe['adx'] = ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        
+        # Ensure ATR is calculated
+        if 'atr' not in dataframe.columns:
+            dataframe['atr'] = ta.ATR(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        
+        dataframe['atr_pct'] = dataframe['atr'] / dataframe['close']
+        
+        # Ensure BB width is calculated
+        if 'bb_width' not in dataframe.columns:
+            dataframe['bb_width'] = (dataframe['bb_upperband'] - dataframe['bb_lowerband']) / dataframe['bb_middleband']
+        
+        # Classify regime
+        # OPTIMIZED: Lowered ADX threshold to 20 to catch trends earlier
+        # NEW: Added EXTREME regime based on Volatility Z-Score
+        
+        # Default conditions
+        is_extreme = pd.Series(False, index=dataframe.index)
+        if '%-volatility_zscore' in dataframe.columns:
+            is_extreme = dataframe['%-volatility_zscore'] > 3.0
+            
+        conditions = [
+            is_extreme,                                                 # Extreme Volatility (Crash/Pump)
+            (dataframe['adx'] > 20) & (dataframe['bb_width'] > 0.04),  # Strong trend
+            (dataframe['adx'] < 20) & (dataframe['bb_width'] < 0.02),  # Sideway/consolidation
+        ]
+        choices = ['EXTREME', 'TREND', 'SIDEWAY']
+        dataframe['market_regime'] = np.select(conditions, choices, default='VOLATILE')
+        
+        return dataframe
+
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """
+        Adds several different TA indicators to the given DataFrame
+        
+        CRITICAL: Must call self.freqai.start() to trigger FreqAI training and prediction!
+        Without this call, FreqAI will NOT train and you get 0 trades.
+        """
+        # Calculate Bollinger Bands for market_regime detection (needed before detect_market_regime)
+        # ta.BBANDS returns tuple: (upperband, middleband, lowerband)
+        bb_upper, bb_middle, bb_lower = ta.BBANDS(dataframe['close'], timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe['bb_upperband'] = bb_upper
+        dataframe['bb_lowerband'] = bb_lower
+        dataframe['bb_middleband'] = bb_middle
+        
+        # This is THE critical line that triggers FreqAI training!
+        # It calls feature_engineering_* methods and trains/predicts
+        dataframe = self.freqai.start(dataframe, metadata, self)
+        
+        # Add market_regime for entry/exit decisions (after FreqAI processing)
+        dataframe = self.detect_market_regime(dataframe)
+        
+        return dataframe
+
+    def feature_engineering_expand_all(self, dataframe: DataFrame, period: int, metadata: dict, **kwargs) -> DataFrame:
+        """
+        *Only functional with FreqAI enabled strategies*
+        
+        expand_all: Features ở đây KHÔNG được tự động nhân bản cho các timeframes khác.
+        Chỉ dùng cho các features cục bộ của base timeframe (5m).
+        
+        ĐẶT Ở ĐÂY (Chỉ 5m):
+        - Chart Patterns (Double Top/Bottom, H&S, Wedge, Triangle, Flag)
+          → Mô hình nến mang tính chất cục bộ, nhân bản 4 TF tạo dữ liệu rác
+        - Data Enhancement (Fear & Greed, API-based)
+          → Dữ liệu từ API, không cần đa khung
+        - Legacy indicators for Market Regime
+        
+        KHÔNG ĐẶT Ở ĐÂY (Đã move sang expand_basic):
+        - SMC Indicators → Order Block 4h có giá trị gấp 10 lần 5m
+        - Wave Indicators → Fibonacci levels cần nhìn từ HTF
+        """
+        
+        # ==== Chart Pattern Recognition (DISABLED) ====
+        # FIX: Disabled because chart patterns are not effective for crypto
+        # and generate 936 redundant features that cause overfitting.
+        # dataframe = ChartPatterns.add_all_patterns(dataframe)
+        
+        # ==== Data Enhancement (5m only) ====
+        # Fear & Greed Index, Volume Imbalance, Funding Proxy
+        # API-based features, không cần đa khung
+        dataframe = DataEnhancement.add_all_features(dataframe, period=period)
+
+        # ==== Legacy indicators (cho Market Regime) ====
+        # Using talib (uppercase function names)
+        dataframe['mfi'] = ta.MFI(dataframe['high'], dataframe['low'], dataframe['close'], dataframe['volume'], timeperiod=14)
+        dataframe['adx'] = ta.ADX(dataframe['high'], dataframe['low'], dataframe['close'], timeperiod=14)
+        dataframe['rsi'] = ta.RSI(dataframe['close'], timeperiod=14)
+        
+        # Bollinger Bands (cần cho market regime detection)
+        dataframe['bb_upperband'], dataframe['bb_middleband'], dataframe['bb_lowerband'] = ta.BBANDS(
+            dataframe['close'], timeperiod=20, nbdevup=2.0, nbdevdn=2.0
+        )
+        
+        dataframe["bb_width"] = (
+            dataframe["bb_upperband"] - dataframe["bb_lowerband"]
+        ) / dataframe["bb_middleband"]
+        
+        # ==== Market Regime Detection (cuối cùng) ====
+        dataframe = self.detect_market_regime(dataframe)
+
+        return dataframe
+
+    def feature_engineering_expand_basic(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
+        """
+        *Only functional with FreqAI enabled strategies*
+        
+        expand_basic: Features ở đây SẼ ĐƯỢC TỰ ĐỘNG NHÂN BẢN cho các timeframes khác!
+        FreqAI sẽ tạo ra: %-log_return_1_5m, %-log_return_1_1h, %-log_return_1_4h, v.v.
+        
+        ĐÂY LÀ NƠI ĐẶT CORE FEATURES + SMC/WAVE:
+        
+        1. Core Features (Log Returns, EMA, Momentum, Volume, Volatility)
+           → Nền tảng cho mọi phân tích, cần nhìn ở tất cả TF
+           
+        2. SMC Indicators (Order Blocks, FVG, Structure, Liquidity)
+           → Order Block ở 4H có giá trị GẤP 10 LẦN ở 5m
+           
+        3. Wave Indicators (Fibonacci Retracement/Extension, Awesome Oscillator)
+           → Fibo levels từ swing 4H là key levels cho toàn bộ price action
+           → AO divergence ở 1H xác nhận reversal mạnh hơn
+        
+        Kết quả: Bot sẽ học từ 5m + 15m + 1h + 4h (True Multi-timeframe SMC Analysis)
+        
+        Ví dụ AI sẽ học:
+        "Nếu giá chạm vùng Fibo 0.618 của khung 4H (từ expand_basic)
+        VÀ xuất hiện mẫu nến đảo chiều ở khung 5m (từ expand_all)
+        → Vào lệnh Mua"
+        """
+        # ==== CORE FEATURE ENGINEERING ====
+        # Tất cả features sẽ được expand cho 5m, 15m, 1h, 4h
+        dataframe = FeatureEngineering.add_all_features(dataframe)
+        
+        # ==== SMC INDICATORS (Multi-TF) ====
+        # Order Blocks, FVG, Structure Direction, Liquidity Zones
+        # Order Block ở 4H có giá trị gấp 10 lần ở 5m
+        dataframe = SMCIndicators.add_all_indicators(dataframe)
+        
+        # ==== WAVE INDICATORS (Multi-TF) ====
+        # Fibonacci Retracement/Extension, Awesome Oscillator, Wave Structure
+        # Fibo levels từ swing 4H là key levels cho toàn bộ price action
+        dataframe = WaveIndicators.add_all_features(dataframe)
+        
+        # ==== SMART LIQUIDITY REVERSAL (Killer Feature) ====
+        # Combine SMC (Liquidity Sweep) + VSA (Stopping Volume/Climax)
+        # This is the "Confluence" feature for AI to learn
+        
+        # 1. Bullish Reversal: Sweep Liquidity Below + Stopping Volume
+        # Check if columns exist (safety first)
+        if '%-liquidity_swept_below' in dataframe.columns and '%-vsa_stopping_volume' in dataframe.columns:
+            dataframe['%-smart_reversal_bull'] = (
+                (dataframe['%-liquidity_swept_below'] > 0) & 
+                (dataframe['%-vsa_stopping_volume'] > 0)
+            ).astype(float)
+        else:
+            dataframe['%-smart_reversal_bull'] = 0.0
+            
+        # 2. Bearish Reversal: Sweep Liquidity Above + Buying Climax
+        if '%-liquidity_swept_above' in dataframe.columns and '%-vsa_buying_climax' in dataframe.columns:
+            dataframe['%-smart_reversal_bear'] = (
+                (dataframe['%-liquidity_swept_above'] > 0) & 
+                (dataframe['%-vsa_buying_climax'] > 0)
+            ).astype(float)
+        else:
+            dataframe['%-smart_reversal_bear'] = 0.0
+            
+        # Combined Feature (-1 to 1)
+        dataframe['%-smart_reversal'] = dataframe['%-smart_reversal_bull'] - dataframe['%-smart_reversal_bear']
+        
+        return dataframe
+
+    def feature_engineering_standard(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
+        """
+        *Only functional with FreqAI enabled strategies*
+        This optional function will be called once with the dataframe of the base timeframe.
+        This is the final chance to add features. The columns won't be modified.
+        All features must be prepended with `%` to be recognized by FreqAI internals.
+        """
+        return dataframe
+
+    def set_freqai_targets(self, dataframe: DataFrame, metadata: dict, **kwargs) -> DataFrame:
+        """
+        *Only functional with FreqAI enabled strategies*
+        Required function to set the targets for the model.
+        All targets must be prepended with `&` to be recognized by the FreqAI internals.
+        
+        Using regression target (% price change) instead of classification
+        to avoid "unseen labels" error when training data is imbalanced.
+        """
+        # Regression target: % price change in next 20 candles
+        # Positive = price goes up, Negative = price goes down
+        future_close = dataframe["close"].shift(-20)
+        dataframe["&-price_change_pct"] = (future_close - dataframe["close"]) / dataframe["close"]
+        
+        return dataframe
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """
+        Based on TA indicators, populates the entry signal for the given dataframe
+        
+        UPGRADED Entry conditions with Weighted Score System (Phase 2):
+        
+        LONG CONDITIONS:
+        1. AI Prediction > threshold (Primary signal)
+        2. Market Regime != VOLATILE (Safety filter)
+        3. Overall Score > 0.7 (Stricter Confluence - was 0.6)
+        4. Structure Direction > -0.2 (Not in strong downtrend)
+        5. Price > EMA 200 (Trend Filter)
+        
+        SHORT CONDITIONS:
+        1. AI Prediction < -threshold 
+        2. Market Regime != VOLATILE
+        3. Overall Score < 0.3 (Stricter Confluence - was 0.4)
+        4. Structure Direction < 0.2 (Not in strong uptrend)
+        5. Price < EMA 200 (Trend Filter)
+        """
+        # Debug logging
+        logger.info(f"Columns available: {len(dataframe.columns)} columns")
+        
+        if self.config['freqai']['enabled']:
+            prediction_col = '&-price_change_pct'
+            
+            if prediction_col in dataframe.columns:
+                logger.info(f"Prediction values sample: {dataframe[prediction_col].head()}")
+                
+                # =====================================================
+                # LONG ENTRY CONDITIONS (Phase 2 Strict)
+                # =====================================================
+                
+                # 1. Base: AI prediction positive
+                long_prediction = dataframe[prediction_col] > self.buy_pred_threshold.value
+                
+                # 2. Market regime: Avoid VOLATILE and EXTREME
+                long_regime = (dataframe['market_regime'] != 'VOLATILE') & (dataframe['market_regime'] != 'EXTREME')
+                
+                # 3. Confluence Filter (STRICT)
+                # FIX: Raised threshold to 0.7 to filter weak confluence
+                long_score = True
+                if '%-overall_score' in dataframe.columns:
+                    long_score = dataframe['%-overall_score'] > 0.7
+                
+                # 4. Dynamic Trend Filter (Smart EMA 200)
+                # Logic: Allow buying in Downtrend ONLY if Oversold (RSI < 30)
+                long_trend = True
+                if '%-dist_to_ema_200' in dataframe.columns and 'rsi' in dataframe.columns:
+                    is_uptrend = dataframe['%-dist_to_ema_200'] > 0
+                    is_oversold = dataframe['rsi'] < 30
+                    # Allowed if Uptrend OR (Downtrend AND Oversold)
+                    long_trend = is_uptrend | is_oversold
+                
+                # 5. VSA Filter (STRICT - Require Valid Move)
+                # FIX: Require VSA Score > 0.5 (Valid Move confirmation)
+                long_vsa = True
+                if '%-vsa_score' in dataframe.columns:
+                    long_vsa = dataframe['%-vsa_score'] > 0.5
+                
+                # 6. Structure Direction Filter (SMC)
+                # FIX: Require bullish structure (BOS/CHoCH up)
+                long_structure = True
+                if '%-structure_direction' in dataframe.columns:
+                    long_structure = dataframe['%-structure_direction'] > 0
+                
+                # 7. Volume active
+                long_volume = dataframe['volume'] > 0
+                
+                # Combine LONG conditions (ALL must be True)
+                dataframe.loc[
+                    long_prediction & long_regime & long_score & 
+                    long_trend & long_vsa & long_structure & long_volume,
+                    'enter_long'] = 1
+                
+                # =====================================================
+                # SHORT ENTRY CONDITIONS (Phase 2 Strict)
+                # =====================================================
+                
+                # 1. Base: AI prediction negative
+                short_prediction = dataframe[prediction_col] < -self.buy_pred_threshold.value
+                
+                # 2. Market regime: Avoid VOLATILE and EXTREME
+                short_regime = (dataframe['market_regime'] != 'VOLATILE') & (dataframe['market_regime'] != 'EXTREME')
+                
+                # 3. Confluence Filter (STRICT)
+                # FIX: Lowered threshold to 0.3 (Strong Bearish)
+                short_score = True
+                if '%-overall_score' in dataframe.columns:
+                    short_score = dataframe['%-overall_score'] < 0.3
+                
+                # 4. Dynamic Trend Filter (Smart EMA 200)
+                # Logic: Allow selling in Uptrend ONLY if Overbought (RSI > 70)
+                short_trend = True
+                if '%-dist_to_ema_200' in dataframe.columns and 'rsi' in dataframe.columns:
+                    is_downtrend = dataframe['%-dist_to_ema_200'] < 0
+                    is_overbought = dataframe['rsi'] > 70
+                    # Allowed if Downtrend OR (Uptrend AND Overbought)
+                    short_trend = is_downtrend | is_overbought
+                
+                # 5. VSA Filter (STRICT - Require Valid Move)
+                # FIX: Require VSA Score > 0.5 (Valid Move confirmation)
+                short_vsa = True
+                if '%-vsa_score' in dataframe.columns:
+                    short_vsa = dataframe['%-vsa_score'] > 0.5
+                
+                # 6. Structure Direction Filter (SMC)
+                # FIX: Require bearish structure (BOS/CHoCH down)
+                short_structure = True
+                if '%-structure_direction' in dataframe.columns:
+                    short_structure = dataframe['%-structure_direction'] < 0
+                
+                # 6. Volume active
+                short_volume = dataframe['volume'] > 0
+                
+                # 7. Fibonacci Protection (Golden Pocket Support)
+                # Don't short into the 0.618 retracement level
+                short_fib_check = True
+                if '%-fib_near_618' in dataframe.columns:
+                    # If near 0.618 (value is 1.0), block short
+                    short_fib_check = dataframe['%-fib_near_618'] != 1.0
+                
+                # Combine SHORT conditions (ALL must be True)
+                dataframe.loc[
+                    short_prediction & short_regime & short_score &
+                    short_trend & short_vsa & short_structure & short_volume & short_fib_check,
+                    'enter_short'] = 1
+                    
+            else:
+                logger.warning(f"Prediction column {prediction_col} NOT FOUND - FreqAI not training!")
+
+        return dataframe
+
+    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        """
+        Exit signal using Simplified Logic:
+        
+        LONG EXIT:
+        1. AI Prediction reverses (becomes bearish)
+        2. Overall Score drops below neutral (< 0.4)
+        3. Extreme Fear (Panic)
+        
+        SHORT EXIT:
+        1. AI Prediction reverses (becomes bullish)
+        2. Overall Score rises above neutral (> 0.6)
+        3. Extreme Fear (Short squeeze risk)
+        """
+        if self.config['freqai']['enabled']:
+            # Regression target column (predicts % price change)
+            prediction_col = '&-price_change_pct'
+            if prediction_col in dataframe.columns:
+                
+                # =====================================================
+                # LONG EXIT CONDITIONS
+                # =====================================================
+                
+                # 1. AI prediction bearish (reversal)
+                exit_prediction = (
+                    (dataframe[prediction_col] < self.sell_pred_threshold.value) &
+                    (dataframe['volume'] > 0)
+                )
+                
+                # 2. Confluence drops (Momentum lost)
+                exit_score = False
+                if '%-overall_score' in dataframe.columns:
+                    exit_score = dataframe['%-overall_score'] < 0.4
+                
+                # 3. Extreme Fear (market panic - exit to safety)
+                exit_fear = False
+                if '%-is_extreme_fear' in dataframe.columns:
+                    exit_fear = dataframe['%-is_extreme_fear'] == 1
+                
+                # 4. Fibonacci Take Profit (Extension 1.618)
+                # If price hits 1.618 extension, consider taking profit
+                exit_fib_tp = False
+                if '%-fib_ext_up_1618' in dataframe.columns:
+                    # Distance is normalized by range. < 0.02 means within 2% of range.
+                    exit_fib_tp = dataframe['%-fib_ext_up_1618'].abs() < 0.02
+                
+                # OPTIMIZED: Require TWO conditions to exit (Prediction + Score)
+                # OR Extreme Fear (Emergency Exit)
+                # OR Fibonacci TP (Strategic Exit)
+                dataframe.loc[
+                    (exit_prediction & exit_score) | exit_fear | exit_fib_tp,
+                    'exit_long'] = 1
+                
+                # =====================================================
+                # SHORT EXIT CONDITIONS
+                # =====================================================
+                
+                # 1. AI prediction bullish (reversal)
+                short_exit_prediction = (
+                    (dataframe[prediction_col] > self.buy_pred_threshold.value) &
+                    (dataframe['volume'] > 0)
+                )
+                
+                # 2. Confluence rises (Bullish momentum returning)
+                short_exit_score = False
+                if '%-overall_score' in dataframe.columns:
+                    short_exit_score = dataframe['%-overall_score'] > 0.6
+                
+                # 3. Extreme Fear (market bottoming, shorts may get squeezed)
+                short_exit_fear = False
+                if '%-is_extreme_fear' in dataframe.columns:
+                    short_exit_fear = dataframe['%-is_extreme_fear'] == 1
+                
+                # OPTIMIZED: Require TWO conditions to exit (Prediction + Score)
+                # OR Extreme Fear (Emergency Exit)
+                dataframe.loc[
+                    (short_exit_prediction & short_exit_score) | short_exit_fear,
+                    'exit_short'] = 1
+        
+        return dataframe
