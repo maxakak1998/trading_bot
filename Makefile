@@ -16,6 +16,7 @@ HYPEROPT_EPOCHS ?= 100
 HYPEROPT_LOSS ?= WinRatioHyperOptLoss
 HYPEROPT_SPACES := buy sell roi
 RANDOM_STATE := 42
+JOBS ?= 2  # Local: 2, GCP: 28
 
 # GCP settings
 GCP_ZONE := us-central1-a
@@ -139,6 +140,9 @@ hyperopt:
 	@echo "   Epochs: $(HYPEROPT_EPOCHS)"
 	@echo "   Loss: $(HYPEROPT_LOSS)"
 	@echo "   Spaces: $(HYPEROPT_SPACES)"
+	@echo "   Jobs: $(JOBS)"
+	@echo "   Docker Image: $(DOCKER_IMAGE)"
+ifeq ($(DOCKER_IMAGE),freqtradeorg/freqtrade:develop_freqai)
 	$(DOCKER_COMPOSE) run --rm freqtrade hyperopt \
 		--strategy $(STRATEGY) \
 		--freqaimodel $(FREQAI_MODEL) \
@@ -147,10 +151,23 @@ hyperopt:
 		--spaces $(HYPEROPT_SPACES) \
 		--timerange $(TRAIN_TIMERANGE) \
 		--random-state $(RANDOM_STATE) \
-		-j 2
+		-j $(JOBS)
+else
+	sudo docker run --rm \
+		-v $$(pwd)/user_data:/freqtrade/user_data \
+		-v $$(pwd)/user_data/config.json:/freqtrade/config.json \
+		$(DOCKER_IMAGE) hyperopt \
+		--strategy $(STRATEGY) \
+		--freqaimodel $(FREQAI_MODEL) \
+		--hyperopt-loss $(HYPEROPT_LOSS) \
+		--epochs $(HYPEROPT_EPOCHS) \
+		--spaces $(HYPEROPT_SPACES) \
+		--timerange $(TRAIN_TIMERANGE) \
+		--random-state $(RANDOM_STATE) \
+		-j $(JOBS)
+endif
 	@echo "✅ Hyperopt complete! Use 'make hyperopt-show' to see best results"
-	@echo "💾 Backing up new models..."
-	./scripts/backup_to_drive.sh models
+	-./scripts/backup_to_drive.sh models 2>/dev/null || true
 
 
 
