@@ -67,20 +67,21 @@ class FreqAIStrategy(IStrategy):
         "0": 0.06      # 6% immediate target
     }
 
-    # Risk Management - Fixed Trailing 1%
-    # -5% Stoploss (standard risk)
+    # Risk Management - Custom Optimized Trailing
     stoploss = -0.05
     
-    # ENABLED: Fixed Trailing Stop (Not optimized by Hyperopt)
-    trailing_stop = True
-    trailing_stop_positive = 0.01        # Activate at 1%
-    trailing_stop_positive_offset = 0.015 # Trail 1.5% behind
-    trailing_only_offset_is_reached = True
+    # DISABLED: Standard trailing stop (replaced by custom logic)
+    trailing_stop = False
+    
+    # Custom Trailing Parameters (Optimizable)
+    # p_trail_start: Profit required to activate trailing
+    p_trail_start = DecimalParameter(0.005, 0.05, default=0.01, space="trailing", optimize=True)
+    # p_trail_offset: Distance from CURRENT PRICE (e.g. 0.01 = 1% below current)
+    p_trail_offset = DecimalParameter(0.002, 0.03, default=0.01, space="trailing", optimize=True)
     
     # Use ROI and exit signals instead of trailing
     use_exit_signal = True
-    exit_profit_only = False
-    ignore_roi_if_entry_signal = False
+    use_custom_stoploss = True  # Enable custom_stoploss function
     
     # Maximum risk per trade (% of margin)
     # 20% max loss per trade on margin
@@ -115,17 +116,18 @@ class FreqAIStrategy(IStrategy):
         return final_leverage
     
     def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime,
-                       current_rate: float, current_profit: float, **kwargs) -> float:
-        """
-        Custom stoploss logic, based on ATR (Average True Range).
-        Returns a negative percentage value relative to current_rate.
+                        current_rate: float, current_profit: float, **kwargs) -> float:
         
-        High volatility (high ATR) → Wider stoploss
-        Low volatility (low ATR) → Tighter stoploss
+        # 1. Custom Trailing Stop Logic
+        # If profit > start => Lock in profit with trailing offset
+        if current_profit >= self.p_trail_start.value:
+            # Return offset relative to CURRENT PRICE
+            # Returning -0.01 means SL is 1% below current price
+            return -self.p_trail_offset.value
+            
+        # 2. Initial Stoploss (ATR or Fixed)
+        # If not yet profitable enough to trail, use ATR Logic
         
-        SAFETY: Stoploss is CLIPPED to ensure max loss never exceeds 20% of margin.
-        Formula: Max_SL_Price = Max_Risk(20%) / Leverage
-        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         last_candle = dataframe.iloc[-1].squeeze()
         
@@ -136,34 +138,20 @@ class FreqAIStrategy(IStrategy):
         current_leverage = getattr(trade, 'leverage', 1.0) or 1.0
         
         # SAFETY LIMIT: Max risk = max_risk_per_trade% of margin
-        # Max_SL_Price = Max_Risk / Leverage
-        # Example: Leverage 5x, Risk 20% → Max SL = 20% / 5 = -4%
-        # Example: Leverage 10x, Risk 20% → Max SL = 20% / 10 = -2%
-        # Example: Leverage 20x, Risk 20% → Max SL = 20% / 20 = -1%
-        max_risk_on_margin = self.max_risk_per_trade  # Use configurable risk limit
+        max_risk_on_margin = self.max_risk_per_trade
         safe_sl_limit = -(max_risk_on_margin / current_leverage)
         
         if atr > 0 and trade.open_rate > 0:
-            # Stoploss = atr_multiplier * (ATR / open_rate)
-            # HYPEROPT: atr_multiplier is tunable (default 3.0)
-            # FIX: Using trade.open_rate instead of current_rate to avoid trailing effect
-            # Example: ATR = 2000, Price = 40000, mult = 3 → SL = -3 * (2000/40000) = -15%
-            # Using 3x ATR gives more room for price movement before stop
+            # Dynamic SL based on ATR
             dynamic_sl = -self.atr_multiplier.value * (atr / trade.open_rate)
             
-            # Apply safety limits:
-            # 1. Cannot be wider than safe_sl_limit (protect margin)
-            # 2. Cannot be tighter than -1% (allow some movement)
-            # 3. Cannot be wider than -15% absolute max
-            final_sl = max(dynamic_sl, safe_sl_limit, -0.15)  # Not wider than limit
-            final_sl = min(final_sl, -0.01)  # Not tighter than 1%
-            
-            logger.debug(f"{pair}: ATR-SL={dynamic_sl:.2%}, SafeLimit={safe_sl_limit:.2%}, "
-                        f"Leverage={current_leverage}x, FinalSL={final_sl:.2%}")
+            # Apply limits
+            final_sl = max(dynamic_sl, safe_sl_limit, -0.15)
+            final_sl = min(final_sl, -0.01)
             
             return final_sl
         
-        # Fallback to static stoploss if ATR not available
+        # Fallback
         return max(self.stoploss, safe_sl_limit)
     
     def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
