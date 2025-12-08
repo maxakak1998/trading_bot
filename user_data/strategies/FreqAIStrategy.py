@@ -43,9 +43,9 @@ class FreqAIStrategy(IStrategy):
     buy_rsi_low = IntParameter(20, 40, default=30, space="buy", optimize=True)
     
     # AI Prediction Confidence
-    # OPTIMIZED: Increased range to force higher confidence entries
-    buy_pred_threshold = DecimalParameter(0.02, 0.05, default=0.03, space="buy", optimize=True)
-    sell_pred_threshold = DecimalParameter(-0.05, -0.02, default=-0.03, space="sell", optimize=True)
+    # RESTORED: Standard range to ensure sufficient trade frequency
+    buy_pred_threshold = DecimalParameter(0.005, 0.03, default=0.01, space="buy", optimize=True)
+    sell_pred_threshold = DecimalParameter(-0.03, -0.005, default=-0.01, space="sell", optimize=True)
     
     # Sell Signal Optimization
     sell_rsi_threshold = IntParameter(20, 80, default=50, space="sell", optimize=True)
@@ -67,15 +67,15 @@ class FreqAIStrategy(IStrategy):
         "0": 0.06      # 6% immediate target
     }
 
-    # Risk Management - Fixed Stoploss, No Trailing
-    # Fixed 20% stoploss to allow room for volatility (max risk)
-    stoploss = -0.20
+    # Risk Management - Fixed Trailing 1%
+    # -5% Stoploss (standard risk)
+    stoploss = -0.05
     
-    # DISABLED: Trailing stop to avoid premature exits
-    trailing_stop = False
-    # trailing_stop_positive = 0.01 
-    # trailing_stop_positive_offset = 0.015
-    # trailing_only_offset_is_reached = True
+    # ENABLED: Fixed Trailing Stop (Not optimized by Hyperopt)
+    trailing_stop = True
+    trailing_stop_positive = 0.01        # Activate at 1%
+    trailing_stop_positive_offset = 0.015 # Trail 1.5% behind
+    trailing_only_offset_is_reached = True
     
     # Use ROI and exit signals instead of trailing
     use_exit_signal = True
