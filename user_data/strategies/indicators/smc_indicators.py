@@ -52,6 +52,10 @@ class SMCIndicators:
         SMCIndicators._calc_choch(dataframe, features)
         SMCIndicators._calc_liquidity_pools(dataframe, features)
         
+        # NEW: OB + Fib Confluence and Structure Change (từ implementation plan)
+        SMCIndicators._calc_ob_fib_confluence(dataframe, features)
+        SMCIndicators._calc_structure_change(dataframe, features)
+        
         # Single concat - much faster than individual inserts
         if features:
             features_df = pd.DataFrame(features, index=dataframe.index)
@@ -478,3 +482,116 @@ class SMCIndicators:
         features = {}
         SMCIndicators._calc_moon_phases(dataframe, features)
         return pd.concat([dataframe, pd.DataFrame(features, index=dataframe.index)], axis=1)
+
+    # ============================================================
+    # OB + FIBONACCI CONFLUENCE (từ implementation plan)
+    # ============================================================
+    
+    @staticmethod
+    def _calc_ob_fib_confluence(dataframe: DataFrame, features: dict) -> None:
+        """
+        Order Block + Fibonacci Confluence Detection.
+        
+        Khi Order Block trùng với vùng Fibonacci, đây là "optimal entry" zone:
+        - Bullish: OB + Fib 50%-78.6% (deep retracement = discount zone)
+        - Bearish: OB + Fib 23.6%-50% (shallow retracement = premium zone)
+        
+        Yêu cầu:
+        - Features từ WaveIndicators (%-fib_position) phải được tính trước
+        - Nếu không có, fallback về price position in range
+        """
+        # Tính Fib position nếu chưa có (fallback)
+        lookback = 50
+        swing_high = dataframe['high'].rolling(lookback).max()
+        swing_low = dataframe['low'].rolling(lookback).min()
+        price_range = swing_high - swing_low
+        
+        fib_pos = (dataframe['close'] - swing_low) / (price_range + 1e-10)
+        
+        # Get OB testing features (đã tính trong _calc_order_blocks)
+        testing_bull_ob = features.get('%-testing_bull_ob', np.zeros(len(dataframe)))
+        testing_bear_ob = features.get('%-testing_bear_ob', np.zeros(len(dataframe)))
+        
+        # Convert to arrays if Series
+        if isinstance(testing_bull_ob, pd.Series):
+            testing_bull_ob = testing_bull_ob.values
+        if isinstance(testing_bear_ob, pd.Series):
+            testing_bear_ob = testing_bear_ob.values
+        
+        # BULLISH Confluence: OB + Fib 38.2%-78.6% (discount zone)
+        # fib_pos < 0.5 means price is in lower half of range
+        bull_fib_zone = (fib_pos < 0.5) & (fib_pos > 0)
+        features['%-ob_fib_bull_confluence'] = (
+            (testing_bull_ob > 0) & bull_fib_zone.values
+        ).astype(float)
+        
+        # BEARISH Confluence: OB + Fib 50%-100% (premium zone) 
+        # fib_pos > 0.5 means price is in upper half of range
+        bear_fib_zone = (fib_pos > 0.5) & (fib_pos < 1.0)
+        features['%-ob_fib_bear_confluence'] = (
+            (testing_bear_ob > 0) & bear_fib_zone.values
+        ).astype(float)
+        
+        # Is near key Fib level 0.618 or 0.5? (optimal entry)
+        near_618 = (fib_pos > 0.60) & (fib_pos < 0.64)  # ~0.618
+        near_500 = (fib_pos > 0.48) & (fib_pos < 0.52)  # ~0.5
+        features['%-at_optimal_fib'] = (near_618 | near_500).astype(float)
+
+    # ============================================================
+    # STRUCTURE CHANGE DETECTION (LL→HH / HH→LL)
+    # ============================================================
+    
+    @staticmethod
+    def _calc_structure_change(dataframe: DataFrame, features: dict, length: int = 20) -> None:
+        """
+        Structure Change Detection - Phát hiện thay đổi cấu trúc.
+        
+        Khác với CHoCH (phá vỡ tức thì), Structure Change là quá trình:
+        - Bull Structure Change: Was LL+LH (downtrend), now forming HH
+        - Bear Structure Change: Was HH+HL (uptrend), now forming LL
+        
+        Logic:
+        1. Xác định structure 5 nến trước
+        2. So sánh với structure hiện tại
+        3. Nếu đổi hướng → Structure Change
+        """
+        # Swing points
+        swing_high = dataframe['high'].rolling(length).max()
+        swing_low = dataframe['low'].rolling(length).min()
+        
+        # Compare với nửa period trước
+        half = length // 2
+        
+        # Previous structure (shifted back)
+        prev_swing_high = swing_high.shift(half)
+        prev_swing_low = swing_low.shift(half)
+        
+        # Was downtrend? (Lower Lows + Lower Highs)
+        prev_ll = swing_low.shift(1) < prev_swing_low
+        prev_lh = swing_high.shift(1) < prev_swing_high
+        was_downtrend = prev_ll & prev_lh
+        
+        # Was uptrend? (Higher Highs + Higher Lows)
+        prev_hh = swing_high.shift(1) > prev_swing_high
+        prev_hl = swing_low.shift(1) > prev_swing_low
+        was_uptrend = prev_hh & prev_hl
+        
+        # Now forming opposite structure
+        now_higher_high = dataframe['close'] > swing_high.shift(1)
+        now_lower_low = dataframe['close'] < swing_low.shift(1)
+        
+        # BULL Structure Change: Was downtrend → Now breaking high
+        bull_change = was_downtrend.shift(1) & now_higher_high
+        features['%-structure_change_bull'] = bull_change.astype(float).fillna(0)
+        
+        # BEAR Structure Change: Was uptrend → Now breaking low
+        bear_change = was_uptrend.shift(1) & now_lower_low
+        features['%-structure_change_bear'] = bear_change.astype(float).fillna(0)
+        
+        # Combined structure confirmation (for easier filtering)
+        # 1 = bullish, -1 = bearish, 0 = none
+        features['%-structure_change_signal'] = np.where(
+            bull_change, 1.0,
+            np.where(bear_change, -1.0, 0.0)
+        )
+

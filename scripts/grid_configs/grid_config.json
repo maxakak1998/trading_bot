@@ -1,0 +1,118 @@
+{
+    "name": "Grid Search Configuration",
+    "description": "Pre-defined configurations to test systematically",
+    "grid_dimensions": {
+        "timeranges": [
+            {
+                "id": "3m_2024_q1",
+                "range": "20240101-20240401",
+                "description": "Q1 2024 (Bull)"
+            },
+            {
+                "id": "3m_2024_q2",
+                "range": "20240401-20240701",
+                "description": "Q2 2024 (Mixed)"
+            },
+            {
+                "id": "6m_2024_h1",
+                "range": "20240101-20240701",
+                "description": "H1 2024 (Full)"
+            },
+            {
+                "id": "1y_2023",
+                "range": "20230101-20240101",
+                "description": "Full Year 2023"
+            }
+        ],
+        "epochs": [
+            100,
+            300,
+            500,
+            800
+        ],
+        "spaces": [
+            {
+                "id": "basic",
+                "value": "buy sell roi",
+                "description": "Entry/Exit/ROI only"
+            },
+            {
+                "id": "full",
+                "value": "buy sell roi trailing",
+                "description": "With trailing stop"
+            }
+        ],
+        "feature_sets": [
+            {
+                "id": "minimal",
+                "description": "Only core indicators",
+                "flags": {
+                    "vsa": true,
+                    "smc": true,
+                    "wave": false,
+                    "chart_patterns": false,
+                    "trailing_stop": true,
+                    "regime_filter": false,
+                    "confluence_filter": false,
+                    "trend_filter": false
+                }
+            },
+            {
+                "id": "smc_focus",
+                "description": "SMC + VSA focus",
+                "flags": {
+                    "vsa": true,
+                    "smc": true,
+                    "wave": false,
+                    "chart_patterns": false,
+                    "trailing_stop": true,
+                    "regime_filter": true,
+                    "confluence_filter": true,
+                    "trend_filter": true,
+                    "htf_ob_confluence": true
+                }
+            },
+            {
+                "id": "full_features",
+                "description": "All features enabled",
+                "flags": {
+                    "vsa": true,
+                    "smc": true,
+                    "wave": true,
+                    "chart_patterns": true,
+                    "trailing_stop": true,
+                    "regime_filter": true,
+                    "confluence_filter": true,
+                    "trend_filter": true,
+                    "htf_ob_confluence": true
+                }
+            }
+        ]
+    },
+    "recommended_tests": [
+        {
+            "name": "Quick Sanity",
+            "timerange": "3m_2024_q1",
+            "epochs": 100,
+            "spaces": "basic",
+            "feature_set": "minimal",
+            "estimated_time": "15 min"
+        },
+        {
+            "name": "SMC Optimal",
+            "timerange": "6m_2024_h1",
+            "epochs": 500,
+            "spaces": "full",
+            "feature_set": "smc_focus",
+            "estimated_time": "1-2 hours"
+        },
+        {
+            "name": "Full Production",
+            "timerange": "1y_2023",
+            "epochs": 800,
+            "spaces": "full",
+            "feature_set": "full_features",
+            "estimated_time": "3-4 hours"
+        }
+    ]
+}

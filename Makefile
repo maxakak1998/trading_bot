@@ -14,7 +14,7 @@ BACKTEST_TIMERANGE := 20240101-20240701
 # Hyperopt settings - Optimized for Win Rate
 HYPEROPT_EPOCHS ?= 100
 HYPEROPT_LOSS ?= WinRatioHyperOptLoss
-HYPEROPT_SPACES := buy sell roi stoploss trailing
+HYPEROPT_SPACES := buy sell roi trailing
 RANDOM_STATE := 42
 JOBS ?= 2  # Local: 2, GCP: 28
 
@@ -480,3 +480,35 @@ diagnose-137: ## Full diagnosis for Error 137 (OOM)
 	@echo "  c) Increase memory in docker-compose.yml"
 	@echo "  d) Close other applications to free RAM"
 	@echo "  e) Use GCP VM: make gcp-hyperopt"
+
+# ===========================================
+# EXPERIMENT AUTOMATION TOOLS
+# ===========================================
+
+experiment-log: ## Log current hyperopt results to experiments.json
+	@python3 scripts/log_experiment.py --name "$(NAME)" --notes "$(NOTES)" --log hyperopt.log
+
+experiment-compare: ## Compare recent experiments
+	@python3 scripts/log_experiment.py --compare --last 15
+
+features-list: ## List all feature flags and their status
+	@python3 scripts/feature_ablation.py --list
+
+features-toggle: ## Toggle a feature (e.g., make features-toggle FEATURE=vsa)
+	@python3 scripts/feature_ablation.py --toggle $(FEATURE)
+
+features-ablation: ## Run full ablation study on all features
+	@python3 scripts/feature_ablation.py --run-all
+
+grid-list: ## List available grid search tests
+	@python3 scripts/grid_runner.py --list
+
+grid-run-local: ## Run a grid test locally (e.g., make grid-run-local TEST="Quick Sanity")
+	@python3 scripts/grid_runner.py --run "$(TEST)"
+
+grid-run-gcp: ## Run a grid test on GCP (e.g., make grid-run-gcp TEST="SMC Optimal")
+	@python3 scripts/grid_runner.py --run-gcp "$(TEST)"
+
+grid-apply-features: ## Apply a feature set to config (e.g., make grid-apply-features SET=smc_focus)
+	@python3 scripts/grid_runner.py --apply-features $(SET)
+
