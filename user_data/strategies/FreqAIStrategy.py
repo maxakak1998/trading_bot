@@ -51,8 +51,8 @@ class FreqAIStrategy(IStrategy):
     sell_rsi_threshold = IntParameter(20, 80, default=50, space="sell", optimize=True)
     
     # ATR multiplier for dynamic stoploss (used in custom_stoploss)
-    # MOVED to 'trailing' space to avoid KeyError in 'stoploss' space
-    atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="trailing", optimize=True)
+    # MOVED to 'buy' space (safe space) to avoid KeyError
+    atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="buy", optimize=True)
     
     # Confidence threshold for trade entries
     confidence_threshold = DecimalParameter(0.3, 0.7, default=0.5, space="buy", optimize=True)
@@ -74,11 +74,11 @@ class FreqAIStrategy(IStrategy):
     # DISABLED: Standard trailing stop (replaced by custom logic)
     trailing_stop = False
     
-    # Custom Trailing Parameters (Optimizable)
+    # Custom Trailing Parameters (Optimizable) - MOVED TO BUY SPACE
     # p_trail_start: Profit required to activate trailing
-    p_trail_start = DecimalParameter(0.005, 0.05, default=0.01, space="trailing", optimize=True)
+    p_trail_start = DecimalParameter(0.005, 0.05, default=0.01, space="buy", optimize=True)
     # p_trail_offset: Distance from CURRENT PRICE (e.g. 0.01 = 1% below current)
-    p_trail_offset = DecimalParameter(0.002, 0.03, default=0.01, space="trailing", optimize=True)
+    p_trail_offset = DecimalParameter(0.002, 0.03, default=0.01, space="buy", optimize=True)
     
     # Use ROI and exit signals instead of trailing
     use_exit_signal = True
