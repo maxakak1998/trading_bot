@@ -70,9 +70,10 @@ class FreqAIStrategy(IStrategy):
     stoploss = -0.03  # 3% stoploss (tighter for higher win rate)
     
     # ENABLED: Trailing stop to lock in profits
+    # FIX: Realistic values for 5m trading (hyperopt gave 30%+ which never activates)
     trailing_stop = True
-    trailing_stop_positive = 0.015  # Activate at 1.5% profit
-    trailing_stop_positive_offset = 0.025  # Trail 2.5% behind
+    trailing_stop_positive = 0.01  # Activate at 1% profit
+    trailing_stop_positive_offset = 0.015  # Trail 1.5% behind peak
     trailing_only_offset_is_reached = True
     
     # Use ROI and exit signals instead of trailing
@@ -556,20 +557,13 @@ class FreqAIStrategy(IStrategy):
                 if '%-money_pressure' in dataframe.columns:
                     long_pressure = dataframe['%-money_pressure'] > 0
                 
-                # Pattern check (new) - no bearish patterns
-                long_pattern = True
-                if '%-pattern_net_score' in dataframe.columns:
-                    long_pattern = dataframe['%-pattern_net_score'] >= 0
+                # REMOVED: Pattern check - too many false positives
+                # REMOVED: Fear/Greed - external API data unreliable
                 
                 # SMC Structure (new) - Higher Highs
                 long_structure = True
                 if '%-structure_direction' in dataframe.columns:
                     long_structure = dataframe['%-structure_direction'] > -0.2
-                
-                # Phase 2: Fear/Greed
-                long_fg = True
-                if '%-is_extreme_greed' in dataframe.columns:
-                    long_fg = dataframe['%-is_extreme_greed'] == 0
                 
                 # Volume active
                 long_volume = dataframe['volume'] > 0
@@ -598,23 +592,14 @@ class FreqAIStrategy(IStrategy):
                         # No HTF available, use OB+Fib confluence from base TF
                         long_htf_ob = dataframe['%-ob_fib_bull_confluence'] > 0
                 
-                # LTF CHoCH Filter: Structure change confirmation (LL→HH)
-                long_choch = True
-                if use_htf_ob_confluence:
-                    if '%-structure_change_bull' in dataframe.columns:
-                        long_choch = (
-                            (dataframe['%-structure_change_bull'] > 0) |  # Structure change
-                            (dataframe.get('%-choch_bull', 0) > 0)  # OR existing CHoCH
-                        )
-                    elif '%-choch_bull' in dataframe.columns:
-                        long_choch = dataframe['%-choch_bull'] > 0
+                # REMOVED: CHoCH filter - keep HTF OB only for simpler confluence
                 
-                # Combine LONG conditions (added HTF OB + CHoCH)
+                # Combine LONG conditions (simplified: 7 filters instead of 12)
                 dataframe.loc[
-                    long_prediction & long_ema_filter & long_htf_ob & long_choch &
+                    long_prediction & long_ema_filter & long_htf_ob &
                     long_regime & long_trend_confluence & 
-                    long_momentum & long_pressure & long_pattern & 
-                    long_structure & long_fg & long_volume,
+                    long_momentum & long_pressure & 
+                    long_structure & long_volume,
                     'enter_long'] = 1
                 
                 # =====================================================
@@ -663,10 +648,7 @@ class FreqAIStrategy(IStrategy):
                 if '%-money_pressure' in dataframe.columns:
                     short_pressure = dataframe['%-money_pressure'] < 0
                 
-                # Pattern check - no bullish patterns
-                short_pattern = True
-                if '%-pattern_net_score' in dataframe.columns:
-                    short_pattern = dataframe['%-pattern_net_score'] <= 0
+                # REMOVED: Pattern check - too many false positives
                 
                 # SMC Structure - Lower Lows
                 short_structure = True
@@ -704,22 +686,13 @@ class FreqAIStrategy(IStrategy):
                         # No HTF available, use OB+Fib confluence from base TF
                         short_htf_ob = dataframe['%-ob_fib_bear_confluence'] > 0
                 
-                # LTF CHoCH Filter: Structure change confirmation (HH→LL)
-                short_choch = True
-                if use_htf_ob_confluence:
-                    if '%-structure_change_bear' in dataframe.columns:
-                        short_choch = (
-                            (dataframe['%-structure_change_bear'] > 0) |  # Structure change
-                            (dataframe.get('%-choch_bear', 0) > 0)  # OR existing CHoCH
-                        )
-                    elif '%-choch_bear' in dataframe.columns:
-                        short_choch = dataframe['%-choch_bear'] > 0
+                # REMOVED: CHoCH filter - keep HTF OB only
                 
-                # Combine SHORT conditions (added HTF OB + CHoCH)
+                # Combine SHORT conditions (simplified: 9 filters instead of 12)
                 dataframe.loc[
-                    short_prediction & short_ema_filter & short_htf_ob & short_choch &
+                    short_prediction & short_ema_filter & short_htf_ob &
                     short_regime & short_trend &
-                    short_momentum & short_pressure & short_pattern &
+                    short_momentum & short_pressure &
                     short_structure & short_rsi & short_volume,
                     'enter_short'] = 1
                     

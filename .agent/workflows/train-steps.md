@@ -11,6 +11,19 @@ Complete workflow for running FreqAI hyperopt on GCP VM with auto-backup and aut
 - GCP VM `trading-bot` exists (create with `make gcp-create` if needed)
 - `rclone` configured on VM (run `make gcp-setup-rclone` once)
 - Local code is working (test with `make hyperopt HYPEROPT_EPOCHS=1 TRAIN_TIMERANGE=20240101-20240102`)
+- **Discord Webhook** configured in `run_hyperopt_flow.sh` (optional, for notifications)
+
+---
+
+## 📢 Discord Notifications
+
+The hyperopt flow now sends Discord notifications:
+- **Start:** "🚀 Hyperopt Started" with epochs and timerange
+- **Complete:** "✅ Hyperopt Complete!" with results summary
+
+To configure:
+1. Create webhook in Discord: Server Settings → Integrations → Webhooks
+2. Update `DISCORD_WEBHOOK` in `/opt/freqtrade/run_hyperopt_flow.sh` on VM
 
 ---
 
