@@ -30,7 +30,7 @@ sudo docker run --rm \
     --freqaimodel XGBoostRegressor \
     --hyperopt-loss WinRatioHyperOptLoss \
     --epochs $EPOCHS \
-    --spaces buy sell roi stoploss trailing \
+    --spaces buy sell roi trailing \
     --timerange $TIMERANGE \
     --random-state 42 \
     -j 28 >> hyperopt.log 2>&1

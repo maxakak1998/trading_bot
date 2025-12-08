@@ -51,7 +51,8 @@ class FreqAIStrategy(IStrategy):
     sell_rsi_threshold = IntParameter(20, 80, default=50, space="sell", optimize=True)
     
     # ATR multiplier for dynamic stoploss (used in custom_stoploss)
-    atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="stoploss", optimize=True)
+    # MOVED to 'trailing' space to avoid KeyError in 'stoploss' space
+    atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="trailing", optimize=True)
     
     # Confidence threshold for trade entries
     confidence_threshold = DecimalParameter(0.3, 0.7, default=0.5, space="buy", optimize=True)
