@@ -328,32 +328,36 @@ gcp-sync: ## Auto-sync: Commit/Push Local -> Pull on VM -> Upload Config
 
 gcp-flow-train: gcp-sync ## Auto: Sync -> Train -> Backup -> Stop VM
 	@echo "🚀 Starting AUTO-FLOW: Train -> Backup -> Stop on $(GCP_VM)..."
-	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+	@echo "⚠️  SSH will disconnect but VM continues running. Use 'make gcp-status' to monitor."
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) -- "cd /opt/freqtrade && \
 		nohup bash -c ' \
-			echo \"[1/3] Training started...\" > flow.log; \
+			echo \"[1/4] Cleaning old models...\" > flow.log; \
 			sudo rm -rf user_data/models/*; \
+			echo \"[2/4] Training started...\" >> flow.log; \
 			sudo docker run --rm \
 				-v \$$(pwd)/user_data:/freqtrade/user_data \
 				-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
 				freqtrade-custom:latest backtesting \
 				--strategy $(STRATEGY) \
 				--freqaimodel $(FREQAI_MODEL) \
-				--timerange $(TRAIN_TIMERANGE) > train.log 2>&1; \
-			echo \"[2/3] Backing up models...\" >> flow.log; \
-			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost; \
+				--timerange $(TRAIN_TIMERANGE) >> train.log 2>&1; \
+			echo \"[3/4] Backing up models...\" >> flow.log; \
+			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost --progress; \
 			rclone copy user_data/strategies/FreqAIStrategy.json gdrive:freqtrade-backup/strategies/; \
-			echo \"[3/3] Stopping VM...\" >> flow.log; \
-			sudo poweroff; \
-		' > flow_debug.log 2>&1 & \
-	"
+			rclone copy train.log gdrive:freqtrade-backup/; \
+			echo \"[4/4] Stopping VM...\" >> flow.log; \
+			sudo shutdown -h now; \
+		' </dev/null >flow_debug.log 2>&1 &"
 	@echo "✅ Flow submitted! VM will stop automatically when done."
 
 gcp-flow-hyperopt: gcp-sync ## Auto: Sync -> Hyperopt -> Backup -> Stop VM
 	@echo "🎯 Starting AUTO-FLOW: Hyperopt -> Backup -> Stop on $(GCP_VM)..."
-	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) --command="cd /opt/freqtrade && \
+	@echo "⚠️  SSH will disconnect but VM continues running. Use 'make gcp-status' to monitor."
+	@gcloud compute ssh $(GCP_VM) --zone=$(GCP_ZONE) -- "cd /opt/freqtrade && \
 		nohup bash -c ' \
-			echo \"[1/3] Hyperopt started...\" > flow.log; \
+			echo \"[1/4] Cleaning old models...\" > flow.log; \
 			sudo rm -rf user_data/models/*; \
+			echo \"[2/4] Hyperopt started ($(HYPEROPT_EPOCHS) epochs)...\" >> flow.log; \
 			sudo docker run --rm \
 				-v \$$(pwd)/user_data:/freqtrade/user_data \
 				-v \$$(pwd)/user_data/config.json:/freqtrade/config.json \
@@ -365,15 +369,14 @@ gcp-flow-hyperopt: gcp-sync ## Auto: Sync -> Hyperopt -> Backup -> Stop VM
 				--spaces $(HYPEROPT_SPACES) \
 				--timerange $(TRAIN_TIMERANGE) \
 				--random-state $(RANDOM_STATE) \
-				-j $(GCP_JOBS) > hyperopt.log 2>&1; \
-			echo \"[2/3] Backing up results...\" >> flow.log; \
-			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost; \
+				-j $(GCP_JOBS) >> hyperopt.log 2>&1; \
+			echo \"[3/4] Backing up results...\" >> flow.log; \
+			rclone sync user_data/models/freqai-xgboost gdrive:freqtrade-backup/models/freqai-xgboost --progress; \
 			rclone copy user_data/strategies/FreqAIStrategy.json gdrive:freqtrade-backup/strategies/; \
 			rclone copy hyperopt.log gdrive:freqtrade-backup/; \
-			echo \"[3/3] Stopping VM...\" >> flow.log; \
-			sudo poweroff; \
-		' > flow_debug.log 2>&1 & \
-	"
+			echo \"[4/4] Stopping VM...\" >> flow.log; \
+			sudo shutdown -h now; \
+		' </dev/null >flow_debug.log 2>&1 &"
 	@echo "✅ Flow submitted! VM will stop automatically when done."
 
 gcp-download: ## Download hyperopt results and models from GCP VM
