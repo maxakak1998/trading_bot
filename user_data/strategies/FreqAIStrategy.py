@@ -37,16 +37,18 @@ class FreqAIStrategy(IStrategy):
     # =====================================================
     
     # Entry/Exit prediction thresholds
-    buy_pred_threshold = DecimalParameter(0.005, 0.03, default=0.01, space="buy", optimize=True)
-    sell_pred_threshold = DecimalParameter(-0.03, -0.005, default=-0.01, space="sell", optimize=True)
-    
-    # Trend filter - ADX threshold
-    buy_adx_threshold = IntParameter(15, 35, default=25, space="buy", optimize=True)
-    
-    # RSI filters
+    # Entry Signal Optimization
+    buy_adx_threshold = IntParameter(20, 50, default=25, space="buy", optimize=True)
+    buy_rsi_high = IntParameter(60, 90, default=70, space="buy", optimize=True)
     buy_rsi_low = IntParameter(20, 40, default=30, space="buy", optimize=True)
-    buy_rsi_high = IntParameter(60, 85, default=70, space="buy", optimize=True)
-    sell_rsi_threshold = IntParameter(65, 85, default=75, space="sell", optimize=True)
+    
+    # AI Prediction Confidence
+    # OPTIMIZED: Increased range to force higher confidence entries
+    buy_pred_threshold = DecimalParameter(0.02, 0.05, default=0.03, space="buy", optimize=True)
+    sell_pred_threshold = DecimalParameter(-0.05, -0.02, default=-0.03, space="sell", optimize=True)
+    
+    # Sell Signal Optimization
+    sell_rsi_threshold = IntParameter(20, 80, default=50, space="sell", optimize=True)
     
     # ATR multiplier for dynamic stoploss (used in custom_stoploss)
     atr_multiplier = DecimalParameter(1.5, 4.0, default=3.0, space="stoploss", optimize=True)
@@ -65,16 +67,15 @@ class FreqAIStrategy(IStrategy):
         "0": 0.06      # 6% immediate target
     }
 
-    # Risk Management - Tighter stoploss + Trailing
-    # With 20% max risk: -3% stoploss means leverage = 20%/3% = ~6.6x
-    stoploss = -0.03  # 3% stoploss (tighter for higher win rate)
+    # Risk Management - Fixed Stoploss, No Trailing
+    # Fixed 20% stoploss to allow room for volatility (max risk)
+    stoploss = -0.20
     
-    # ENABLED: Trailing stop to lock in profits
-    # FIX: Realistic values for 5m trading (hyperopt gave 30%+ which never activates)
-    trailing_stop = True
-    trailing_stop_positive = 0.01  # Activate at 1% profit
-    trailing_stop_positive_offset = 0.015  # Trail 1.5% behind peak
-    trailing_only_offset_is_reached = True
+    # DISABLED: Trailing stop to avoid premature exits
+    trailing_stop = False
+    # trailing_stop_positive = 0.01 
+    # trailing_stop_positive_offset = 0.015
+    # trailing_only_offset_is_reached = True
     
     # Use ROI and exit signals instead of trailing
     use_exit_signal = True
