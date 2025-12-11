@@ -48,8 +48,7 @@ sudo docker run --rm \
     freqtrade-custom:latest backtesting \
     --strategy $STRATEGY \
     --freqaimodel XGBoostRegressor \
-    --timerange $TIMERANGE \
-    -j 28 > backtest_result.log 2>&1
+    --timerange $TIMERANGE > backtest_result.log 2>&1
 BACKTEST_END=$(date +%s)
 DURATION=$((BACKTEST_END - BACKTEST_START))
 DURATION_MIN=$((DURATION / 60))
