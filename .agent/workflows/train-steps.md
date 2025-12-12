@@ -114,6 +114,24 @@ Results are automatically backed up to:
 - `gdrive:freqtrade-backup/strategies/FreqAIStrategy.json`
 - `gdrive:freqtrade-backup/hyperopt.log`
 
+### ⚠️ Step 3.6: MANDATORY - Sync Hyperopt Params to Local
+**CRITICAL: MUST do this BEFORE running any OOS backtest!**
+
+Hyperopt exports best params to `FreqAIStrategy.json` on GCP. You MUST pull these params to local:
+
+```bash
+# Download params from GCP to local
+gcloud compute scp trading-bot:/opt/freqtrade/user_data/strategies/FreqAIStrategy.json user_data/strategies/FreqAIStrategy.json --zone=asia-southeast1-b
+
+# Verify key params
+cat user_data/strategies/FreqAIStrategy.json | grep -E "buy_adx|buy_pred|trailing_stop"
+
+# Commit and push
+git add . && git commit -m "Apply hyperopt optimal params" && git push
+```
+
+> **⚠️ WARNING:** Skipping this step will cause OOS backtest to use OLD params, resulting in completely different (usually worse) results!
+
 ---
 
 ## Phase 4: Evaluate Success Criteria
