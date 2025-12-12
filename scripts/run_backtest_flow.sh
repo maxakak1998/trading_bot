@@ -6,7 +6,8 @@ DISCORD_WEBHOOK="https://discord.com/api/webhooks/1447437726038233244/DvfA_bftWa
 
 send_discord() {
     local message="$1"
-    local clean_message=$(echo "$message" | sed 's/"/\\"/g')
+    # Escape special chars: newlines -> \n, quotes -> \"
+    local clean_message=$(echo "$message" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
     wget -q -O- --timeout=10 --post-data="{\"content\": \"$clean_message\"}" --header="Content-Type: application/json" "$DISCORD_WEBHOOK" >/dev/null 2>&1
 }
 
