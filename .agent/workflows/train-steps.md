@@ -192,6 +192,34 @@ Test on data **NOT used in hyperopt** to check for overfitting:
 make backtest BACKTEST_TIMERANGE=20240701-20241001
 ```
 
+### Step 6.2b: Automated OOS Backtest on GCP (with Discord Notifications)
+Use the automated backtest pipeline script for GCP with Discord notifications:
+
+```bash
+# Start VM if needed
+make gcp-start
+
+# Sync code and run automated backtest
+gcloud compute ssh trading-bot --zone=asia-southeast1-b --command="cd /opt/freqtrade && git pull && chmod +x scripts/run_backtest_flow.sh && setsid /opt/freqtrade/scripts/run_backtest_flow.sh 20240701-20241201 FreqAIStrategy </dev/null >/opt/freqtrade/flow_debug.log 2>&1 &"
+```
+
+**Script Location:** `scripts/run_backtest_flow.sh`
+
+**Discord Notifications (5 steps):**
+1. 🚀 Backtest Started
+2. 📥 Download Data
+3. ⏳ Running Backtest
+4. 📊 Parse Results
+5. ✅ **Final Results Summary** (win rate, profit, drawdown, etc.)
+
+**Auto-shutdown:** VM shuts down after sending final results.
+
+**View Logs after completion:**
+```bash
+make gcp-start
+gcloud compute ssh trading-bot --zone=asia-southeast1-b --command="tail -50 /opt/freqtrade/backtest_result.log"
+```
+
 ### Step 6.3: Validate Out-of-Sample Results
 Compare hyperopt results vs out-of-sample backtest:
 

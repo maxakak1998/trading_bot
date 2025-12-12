@@ -9,8 +9,8 @@
     },
     "buy": {
       "atr_multiplier": 3.908,
-      "buy_adx_threshold": 32,
-      "buy_pred_threshold": 0.01,
+      "buy_adx_threshold": 42,
+      "buy_pred_threshold": 0.03,
       "buy_rsi_high": 68,
       "buy_rsi_low": 36,
       "confidence_threshold": 0.564,
@@ -28,7 +28,7 @@
       "119": 0
     },
     "trailing": {
-      "trailing_stop": false,
+      "trailing_stop": true,
       "trailing_stop_positive": 0.035,
       "trailing_stop_positive_offset": 0.106,
       "trailing_only_offset_is_reached": true
