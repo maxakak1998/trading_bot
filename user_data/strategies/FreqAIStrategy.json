@@ -9,11 +9,11 @@
     },
     "buy": {
       "atr_multiplier": 3.908,
-      "buy_adx_threshold": 42,
-      "buy_pred_threshold": 0.03,
+      "buy_adx_threshold": 25,
+      "buy_pred_threshold": 0.005,
       "buy_rsi_high": 68,
       "buy_rsi_low": 36,
-      "confidence_threshold": 0.564,
+      "confidence_threshold": 0.3,
       "p_trail_offset": 0.022,
       "p_trail_start": 0.015
     },

@@ -136,32 +136,46 @@ git add . && git commit -m "Apply hyperopt optimal params" && git push
 
 ## Phase 4: Evaluate Success Criteria
 
+### 🎯 Trading Goal
+- **1R (Risk per trade)** = $10 (3% of $333 stake)
+- **Daily Target** = Minimum 1R profit ($10/day)
+- **Monthly Target** = ~$300/month
+
 ### ✅ Success Criteria (ALL must pass)
 
 | Metric | Target | How to Check |
 |--------|--------|--------------|
-| Win Rate | ≥ 65% | `Win%` column in hyperopt result |
-| Long/Short Alignment | Long > Short in Bull, Short > Long in Bear | `Long / Short trades` and `Long / Short profit %` |
+| **Trades/Day** | **≥ 2** | `Total/Daily Avg Trades` |
+| Win Rate | ≥ 60% | `Win%` column in hyperopt result |
+| **Daily Profit** | **≥ 1R ($10)** | `Avg. daily profit` |
 | Total Profit | > 0% | `Total profit %` |
-| Drawdown | < 10% | `Max Drawdown (Acct)` |
+| Drawdown | < 15% | `Max Drawdown (Acct)` |
 | Profit Factor | > 1.0 | `Profit factor` |
-| Sortino | > 0 | `Sortino` |
+
+### Risk Parameters
+```
+Stake Amount: $333
+Stoploss: -3% = -$10 (1R)
+Max Open Trades: 3
+Max Risk: 3R = $30
+```
 
 ### Example Good Result:
 ```
-Win Rate:       68%
-Long/Short:     45 / 12 (Bull market, 2024-01 to 2024-07)
-Total Profit:   +15.3%
-Drawdown:       6.2%
-Profit Factor:  1.85
+Trades/Day:     2.5
+Win Rate:       62%
+Daily Profit:   +$15 (1.5R)
+Total Profit:   +12.3%
+Drawdown:       8.2%
+Profit Factor:  1.45
 ```
 
 ### Example Bad Result:
 ```
-Win Rate:       48%           ❌ Below 65%
-Long/Short:     12 / 45       ❌ More shorts in bull market
-Total Profit:   -8.2%         ❌ Losing money
-Drawdown:       15.3%         ❌ Above 10%
+Trades/Day:     0.5           ❌ Below 2/day
+Win Rate:       48%           ❌ Below 60%
+Daily Profit:   -$5           ❌ Below 1R
+Drawdown:       18.3%         ❌ Above 15%
 ```
 
 ---
