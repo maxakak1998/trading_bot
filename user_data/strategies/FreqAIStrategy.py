@@ -519,103 +519,105 @@ class FreqAIStrategy(IStrategy):
                 # Instead of AND logic (all must be True), use weighted scores
                 # This allows partial confluence and better trade frequency control
                 
-                # Initialize score array
-                long_score = pd.Series(0.0, index=dataframe.index)
-                
                 # Get flags once
                 flags = self.config.get('freqai', {}).get('feature_flags', {})
                 use_htf_ob_confluence = flags.get('htf_ob_confluence', True)
                 
                 # 1. AI Prediction (30% weight) - REQUIRED BASE
-                ai_positive = dataframe[prediction_col] > self.buy_pred_threshold.value
-                long_score = long_score.where(~ai_positive, long_score + 0.30)
+                ai_positive = (dataframe[prediction_col] > self.buy_pred_threshold.value).astype(float)
                 
                 # 2. HTF Order Block (25% weight)
-                htf_ob_signal = pd.Series(False, index=dataframe.index)
+                htf_ob_signal = np.zeros(len(dataframe))
                 if use_htf_ob_confluence:
                     if '%-testing_bull_ob_4h' in dataframe.columns:
-                        htf_ob_signal = (dataframe['%-testing_bull_ob_4h'] > 0)
+                        htf_ob_signal = (dataframe['%-testing_bull_ob_4h'] > 0).astype(float).values
                     elif '%-testing_bull_ob_1h' in dataframe.columns:
-                        htf_ob_signal = (dataframe['%-testing_bull_ob_1h'] > 0)
+                        htf_ob_signal = (dataframe['%-testing_bull_ob_1h'] > 0).astype(float).values
                     if '%-ob_fib_bull_confluence' in dataframe.columns:
-                        htf_ob_signal = htf_ob_signal | (dataframe['%-ob_fib_bull_confluence'] > 0)
-                long_score = long_score.where(~htf_ob_signal, long_score + 0.25)
+                        htf_ob_signal = np.maximum(htf_ob_signal, (dataframe['%-ob_fib_bull_confluence'] > 0).astype(float).values)
                 
                 # 3. ADX/Regime (15% weight) - Trending market
-                adx_signal = pd.Series(False, index=dataframe.index)
+                adx_signal = np.zeros(len(dataframe))
                 if '%-ker_10' in dataframe.columns:
-                    adx_signal = dataframe['%-ker_10'] > 0.4
+                    adx_signal = (dataframe['%-ker_10'] > 0.4).astype(float).values
                 elif 'adx' in dataframe.columns:
-                    adx_signal = dataframe['adx'] > self.buy_adx_threshold.value
-                long_score = long_score.where(~adx_signal, long_score + 0.15)
+                    adx_signal = (dataframe['adx'] > self.buy_adx_threshold.value).astype(float).values
                 
                 # 4. Momentum Confluence (15% weight)
-                momentum_signal = pd.Series(False, index=dataframe.index)
+                momentum_signal = np.zeros(len(dataframe))
                 if '%-momentum_confluence' in dataframe.columns:
-                    momentum_signal = dataframe['%-momentum_confluence'] > 0.4
-                long_score = long_score.where(~momentum_signal, long_score + 0.15)
+                    momentum_signal = (dataframe['%-momentum_confluence'] > 0.4).astype(float).values
                 
                 # 5. Money Pressure (15% weight)
-                pressure_signal = pd.Series(False, index=dataframe.index)
+                pressure_signal = np.zeros(len(dataframe))
                 if '%-money_pressure' in dataframe.columns:
-                    pressure_signal = dataframe['%-money_pressure'] > 0
-                long_score = long_score.where(~pressure_signal, long_score + 0.15)
+                    pressure_signal = (dataframe['%-money_pressure'] > 0).astype(float).values
+                
+                # Calculate total LONG score (sum of weighted signals)
+                long_score = (
+                    ai_positive.values * 0.30 +      # AI: 30%
+                    htf_ob_signal * 0.25 +           # HTF OB: 25%
+                    adx_signal * 0.15 +              # ADX: 15%
+                    momentum_signal * 0.15 +         # Momentum: 15%
+                    pressure_signal * 0.15           # Pressure: 15%
+                )
                 
                 # Volume filter (must have volume - not scored, just required)
                 has_volume = dataframe['volume'] > 0
                 
                 # LONG ENTRY: Score >= threshold AND has volume AND AI is positive (base requirement)
                 dataframe.loc[
-                    ai_positive & has_volume & (long_score >= self.entry_score_threshold.value),
+                    (ai_positive > 0) & has_volume & (long_score >= self.entry_score_threshold.value),
                     'enter_long'] = 1
                 
                 # Log score distribution for debugging
                 if len(dataframe) > 0:
-                    logger.info(f"LONG Score stats: mean={long_score.mean():.3f}, max={long_score.max():.3f}, entries={((long_score >= self.entry_score_threshold.value) & ai_positive).sum()}")
+                    logger.info(f"LONG Score stats: mean={long_score.mean():.3f}, max={long_score.max():.3f}, entries={((long_score >= self.entry_score_threshold.value) & (ai_positive > 0)).sum()}")
                 
                 # =====================================================
                 # SHORT ENTRY - WEIGHTED SCORING SYSTEM
                 # =====================================================
                 
-                # Initialize score array
-                short_score = pd.Series(0.0, index=dataframe.index)
-                
                 use_trend_filter = flags.get('trend_filter', True)
                 
                 # 1. AI Prediction (30% weight) - REQUIRED BASE
-                ai_negative = dataframe[prediction_col] < -self.buy_pred_threshold.value
-                short_score = short_score.where(~ai_negative, short_score + 0.30)
+                ai_negative = (dataframe[prediction_col] < -self.buy_pred_threshold.value).astype(float)
                 
                 # 2. HTF Order Block - Bear (25% weight)
-                htf_ob_bear = pd.Series(False, index=dataframe.index)
+                htf_ob_bear = np.zeros(len(dataframe))
                 if use_htf_ob_confluence:
                     if '%-testing_bear_ob_4h' in dataframe.columns:
-                        htf_ob_bear = (dataframe['%-testing_bear_ob_4h'] > 0)
+                        htf_ob_bear = (dataframe['%-testing_bear_ob_4h'] > 0).astype(float).values
                     elif '%-testing_bear_ob_1h' in dataframe.columns:
-                        htf_ob_bear = (dataframe['%-testing_bear_ob_1h'] > 0)
+                        htf_ob_bear = (dataframe['%-testing_bear_ob_1h'] > 0).astype(float).values
                     if '%-ob_fib_bear_confluence' in dataframe.columns:
-                        htf_ob_bear = htf_ob_bear | (dataframe['%-ob_fib_bear_confluence'] > 0)
-                short_score = short_score.where(~htf_ob_bear, short_score + 0.25)
+                        htf_ob_bear = np.maximum(htf_ob_bear, (dataframe['%-ob_fib_bear_confluence'] > 0).astype(float).values)
                 
                 # 3. ADX/Regime (15% weight)
-                adx_short = pd.Series(False, index=dataframe.index)
+                adx_short = np.zeros(len(dataframe))
                 if '%-ker_10' in dataframe.columns:
-                    adx_short = dataframe['%-ker_10'] > 0.4
+                    adx_short = (dataframe['%-ker_10'] > 0.4).astype(float).values
                 elif 'adx' in dataframe.columns:
-                    adx_short = dataframe['adx'] > self.buy_adx_threshold.value
-                short_score = short_score.where(~adx_short, short_score + 0.15)
+                    adx_short = (dataframe['adx'] > self.buy_adx_threshold.value).astype(float).values
                 
                 # 4. Momentum Confluence - Bearish (15% weight)
-                momentum_short = pd.Series(False, index=dataframe.index)
+                momentum_short = np.zeros(len(dataframe))
                 if '%-momentum_confluence' in dataframe.columns:
-                    momentum_short = dataframe['%-momentum_confluence'] < 0.6
-                short_score = short_score.where(~momentum_short, short_score + 0.15)
+                    momentum_short = (dataframe['%-momentum_confluence'] < 0.6).astype(float).values
                 
                 # 5. Money Pressure - Selling (15% weight)
-                pressure_short = pd.Series(False, index=dataframe.index)
+                pressure_short = np.zeros(len(dataframe))
                 if '%-money_pressure' in dataframe.columns:
-                    pressure_short = dataframe['%-money_pressure'] < 0
-                short_score = short_score.where(~pressure_short, short_score + 0.15)
+                    pressure_short = (dataframe['%-money_pressure'] < 0).astype(float).values
+                
+                # Calculate total SHORT score
+                short_score = (
+                    ai_negative.values * 0.30 +
+                    htf_ob_bear * 0.25 +
+                    adx_short * 0.15 +
+                    momentum_short * 0.15 +
+                    pressure_short * 0.15
+                )
                 
                 # EMA 200 TREND FILTER (REQUIRED for shorts - not scored)
                 # Only allow SHORT when price < EMA 200 (downtrend)
@@ -627,17 +629,14 @@ class FreqAIStrategy(IStrategy):
                         ema_200 = ta.EMA(dataframe['close'], timeperiod=200)
                         ema_filter = dataframe['close'] < ema_200
                 
-                # Volume filter
-                has_volume = dataframe['volume'] > 0
-                
                 # SHORT ENTRY: Score >= threshold AND EMA filter AND volume AND AI negative
                 dataframe.loc[
-                    ai_negative & has_volume & ema_filter & (short_score >= self.entry_score_threshold.value),
+                    (ai_negative > 0) & has_volume & ema_filter & (short_score >= self.entry_score_threshold.value),
                     'enter_short'] = 1
                 
                 # Log score distribution
                 if len(dataframe) > 0:
-                    logger.info(f"SHORT Score stats: mean={short_score.mean():.3f}, max={short_score.max():.3f}, entries={((short_score >= self.entry_score_threshold.value) & ai_negative & ema_filter).sum()}")
+                    logger.info(f"SHORT Score stats: mean={short_score.mean():.3f}, max={short_score.max():.3f}, entries={((short_score >= self.entry_score_threshold.value) & (ai_negative > 0) & ema_filter).sum()}")
                     
             else:
                 logger.warning(f"Prediction column {prediction_col} NOT FOUND - FreqAI not training!")
