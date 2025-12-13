@@ -50,7 +50,8 @@ class FreqAIStrategy(IStrategy):
     # Entry Score Threshold for weighted scoring system
     # Higher = stricter (fewer but higher quality trades)
     # Lower = looser (more trades but lower quality)
-    entry_score_threshold = DecimalParameter(0.5, 0.9, default=0.7, space="buy", optimize=True)
+    # Note: Currently only AI (30%) + ADX (15%) = 45% max, so threshold must be <= 0.45
+    entry_score_threshold = DecimalParameter(0.3, 0.6, default=0.45, space="buy", optimize=True)
     
     # Sell Signal Optimization
     sell_rsi_threshold = IntParameter(20, 80, default=50, space="sell", optimize=True)
